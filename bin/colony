@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""colony — Theia device fleet & deployment (provision · orchestrate · cleanup).
+
+Split out of theia: the deploy/orchestration ADAPTER. theia's responsibility ends
+at producing a per-rig bundle at a KNOWN PLACE; colony picks it up and drives the
+rig. A different shop swaps colony for Puppet/Salt/Flux behind the SAME contract.
+
+THE CONTRACT (what theia emits, what colony consumes), rooted at $THEIA_WORKSPACE:
+    dist/manifest/<machine>/         the per-rig bundle (theia `dist` delivers it)
+      ├── executor.json + *.json     supervisor tree + manifest slices
+      ├── config/<fc>.json           per-FC config (already merged)
+      ├── <machine>.deb              the theia-release runtime/services .deb(s)
+      └── certs/                     mTLS material
+    deploy/registry/<target>.yml     WHICH host (ansible_host + machine slice) — operator data
+    deploy/config/<target>/          per-target config overrides (deep-merged on top)
+
+colony is agentless (Ansible SSH-push). The verbs (relocated verbatim from theia.py
+cmd_provision/orchestrate/cleanup):
+    colony provision  <target> [ansible-args]   OS pkgs + etcd + mender client
+    colony orchestrate <target> [ansible-args]   push the bundle: .deb + executor + config
+    colony cleanup    <target> [ansible-args]    uninstall (inverse); -e wipe_etcd/wipe_mender
+
+<target> names a rig in deploy/registry/<target>.yml. $THEIA_WORKSPACE roots the
+bundle + registry (defaults to the CWD); $COLONY_ANSIBLE overrides the playbook dir
+(defaults to this repo's ansible/).
+"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ANSIBLE = Path(os.environ.get("COLONY_ANSIBLE") or (HERE.parent / "ansible"))
+# The workspace that holds the bundle (dist/manifest) + registry + config overrides.
+# theia's `dist` emits there; colony reads it. Defaults to the CWD (run from the ws).
+WORKSPACE = Path(os.environ.get("THEIA_WORKSPACE") or os.getcwd())
+
+
+def _run(cmd: list[str], cwd: Path) -> int:
+    print("+ " + " ".join(cmd), file=sys.stderr)
+    return subprocess.call(cmd, cwd=str(cwd))
+
+
+def _ansible(playbook: str, args: list[str]) -> int:
+    """Run a playbook from colony/ansible/ (agentless SSH-push). THEIA_WORKSPACE in
+    the env roots the inventory's manifest_dir/registry_dir/config_override_dir."""
+    cmd = ["ansible-playbook", "-i", str(ANSIBLE / "inventory" / "hosts"),
+           str(ANSIBLE / playbook), *args]
+    env_ws = {**os.environ, "THEIA_WORKSPACE": str(WORKSPACE)}
+    print(f"+ THEIA_WORKSPACE={WORKSPACE}", file=sys.stderr)
+    os.environ.update(env_ws)
+    return _run(cmd, cwd=ANSIBLE)
+
+
+def _target(args: list[str], verb: str) -> tuple[str | None, list[str]]:
+    tgt, rest = None, []
+    for a in args:
+        if tgt is None and not a.startswith("-"):
+            tgt = a
+        else:
+            rest.append(a)
+    if not tgt:
+        print(f"colony {verb}: needs a target name "
+              f"(deploy/registry/<target>.yml), e.g. `colony {verb} rpi4`",
+              file=sys.stderr)
+    return tgt, rest
+
+
+def _verb(playbook: str, verb: str, args: list[str]) -> int:
+    tgt, rest = _target(args, verb)
+    if not tgt:
+        return 2
+    reg = WORKSPACE / "deploy" / "registry" / f"{tgt}.yml"
+    if not reg.is_file():
+        print(f"colony {verb}: no registry entry {reg} — add it (ansible_host + "
+              f"machine) to deploy this target.", file=sys.stderr)
+        return 1
+    return _ansible(playbook, ["-e", f"target={tgt}", *rest])
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__, file=sys.stderr)
+        return 0
+    verb, rest = argv[0], argv[1:]
+    return {
+        "provision":   lambda: _verb("provision.yml",   "provision",   rest),
+        "orchestrate": lambda: _verb("orchestrate.yml", "orchestrate", rest),
+        "cleanup":     lambda: _verb("cleanup.yml",     "cleanup",     rest),
+    }.get(verb, lambda: (print(f"colony: unknown verb '{verb}' "
+                               f"(provision|orchestrate|cleanup)", file=sys.stderr) or 2))()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

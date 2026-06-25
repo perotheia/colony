@@ -1,0 +1,39 @@
+# Theia rig inventory — agentless SSH targets, grouped by rig + machine role.
+#
+# A "rig" is one vehicle/test-bench (a TIPC cluster, isolated by tipc_cluster_id —
+# see deploy/run-supervisor.sh). Each rig has machines by role: `central` (the
+# etcd host + gateway) and `compute` (the AUTOSAR worker). The group vars map a
+# host to its artheia manifest machine name (machine=) so the playbooks push the
+# right dist/manifest/<machine>/ slice.
+#
+# Real fleets generate this from the manifest; this is the dev/lab template.
+# `theia provision <machine>` / `theia orchestrate <machine>` target one host.
+
+[all:vars]
+# All controller-side deploy DATA roots at the consuming WORKSPACE
+# ($THEIA_WORKSPACE), NOT the framework — a rig's manifest, registry, and config
+# overrides belong to its own workspace (demo/ for the fwk's tests, gataway_ws
+# for an external user). $THEIA_WORKSPACE is set by that ws's setup_local.sh
+# (which `theia init` writes). Fallback: the framework checkout two dirs up, so a
+# bare framework run still works. Override any with -e <var>=/abs/path.
+_ws               = {{ lookup('env', 'THEIA_WORKSPACE') | default(playbook_dir + '/../..', true) }}
+manifest_dir      = {{ _ws }}/dist/manifest
+registry_dir      = {{ _ws }}/deploy/registry
+config_override_dir = {{ _ws }}/deploy/config
+etcd_machine      = central
+
+# ----- lab rig (the dev bench: dalek controller, rpi4 + x86 boxes) -----------
+[rig_lab:children]
+rig_lab_central
+rig_lab_compute
+
+[rig_lab_central]
+# rig1-central is the ssh-config alias (user=axadmin, host=10.0.0.22); the rpi4.
+rig1-central    ansible_host=10.0.0.22  ansible_user=axadmin  machine=central
+
+[rig_lab_compute]
+# add compute nodes here, e.g.:
+# taycann ansible_host=10.0.0.33  machine=compute
+
+[rig_lab:vars]
+rig_id = lab

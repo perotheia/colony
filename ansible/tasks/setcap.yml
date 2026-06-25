@@ -1,0 +1,38 @@
+# setcap.yml — file capabilities for the theia binaries. This is the SINGLE
+# SOURCE OF TRUTH for the cap contract (Puppet is gone). Runs AFTER install (a
+# fresh binary copy clears caps). The local `theia install` path mirrors this
+# exactly (_stage_local in theia.py).
+#
+#   supervisor : cap_sys_nice,cap_net_admin  (realtime sched + affinity on FC
+#                                             threads; TIPC `node set clusterid`
+#                                             rig isolation + topology presence)
+#   gateway    : cap_net_raw,cap_net_admin   (AF_PACKET / raw CAN+UDP for ASAM-CMP)
+#   bin/fw     : cap_net_admin               (nft -f the IP-DMZ ruleset → FW_APPLIED)
+#
+# +eip = Effective+Inheritable+Permitted. Idempotent (getcap guard). Only for
+# binaries that EXIST ON THE RIG (gateway/fw aren't in every machine's bundle) —
+# stat the remote path, setcap only when present and not already capped.
+- name: "Stat the cap-bearing binaries on the rig"
+  ansible.builtin.stat:
+    path: "{{ theia_root }}/{{ item.bin }}"
+  loop: "{{ _theia_caps }}"
+  register: _capstat
+  vars:
+    _theia_caps:
+      - { bin: "bin/supervisor", cap: "cap_sys_nice,cap_net_admin" }
+      - { bin: "bin/gateway", cap: "cap_net_raw,cap_net_admin" }
+      - { bin: "bin/fw", cap: "cap_net_admin" }
+
+- name: "Setcap the present binaries (idempotent getcap guard)"
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      getcap {{ theia_root }}/{{ item.item.bin }} | grep -q . ||
+      setcap {{ item.item.cap }}+eip {{ theia_root }}/{{ item.item.bin }}
+    executable: /bin/bash
+  loop: "{{ _capstat.results }}"
+  loop_control:
+    label: "{{ item.item.bin }}"
+  when: item.stat.exists
+  register: _setcap
+  changed_when: "'setcap' in _setcap.cmd"

@@ -1,0 +1,46 @@
+# config-override.yml — the per-TARGET config override pass.
+#
+# After seed-config.yml lands the machine-generic per-FC config on the device,
+# this deep-merges deploy/config/<target>/<fc>.json ON TOP — so a deploy target
+# keys its own profile off its NAME, not a synthetic artheia machine. Example:
+# the rpi4 GPS-feed box runs the `central` manifest but has no PTP NIC, so
+# deploy/config/rpi4/tsync.json disables ptp4l/phc2sys/gpsd.
+#
+# The merge is done HERE, on the CONTROLLER, over the two parsed JSON docs that
+# BOTH live on the controller — the machine-generic profile (config_src_dir,
+# i.e. dist/manifest/<machine>/config/<fc>.json) and the per-target override
+# (deploy/config/<target>/<fc>.json) — with ansible's recursive combine(), then
+# the merged result is pushed (robust — no on-device JSON munging). Partial
+# override semantics match _deep_merge in theia.py: dicts merge key-by-key,
+# scalars/lists replace.
+#
+# A target with no deploy/config/<target>/ dir is a no-op (the loop is empty).
+- name: "Find the per-target config overrides on the controller"
+  ansible.builtin.find:
+    paths: "{{ target_override_dir }}"
+    patterns: "*.json"
+  delegate_to: localhost
+  become: false
+  register: _target_overrides
+  failed_when: false           # no per-target dir → no overrides, tolerate
+
+- name: "Deep-merge each override onto the machine-generic profile + push"
+  ansible.builtin.copy:
+    # base    = config_src_dir/<fc>.json (the machine-generic profile already
+    #           merged with deploy/config/<machine>/ at manifest time) — or {}
+    #           if this FC has no machine-generic file.
+    # override= deploy/config/<target>/<fc>.json (this loop item).
+    # Both read on the CONTROLLER; combine(recursive=True) merges dicts key-by-
+    # key, override scalars/lists win. The merged JSON is written to the device.
+    content: >-
+      {{
+        ((lookup('file', config_src_dir ~ '/' ~ (item.path | basename), errors='ignore') | default('{}', true) | from_json)
+          | combine((lookup('file', item.path) | from_json), recursive=True))
+        | to_nice_json
+      }}
+    dest: "{{ theia_root }}/config/{{ item.path | basename }}"
+    mode: "0644"
+  loop: "{{ _target_overrides.files | default([]) }}"
+  loop_control:
+    label: "{{ deploy_target }}/{{ item.path | basename }}"
+  notify: "reload supervisor"

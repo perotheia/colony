@@ -1,0 +1,134 @@
+# theia cleanup — uninstall any prior Theia install from a rig before a fresh
+# rollout (e.g. wiping a Pi that ran a different stack, then `theia orchestrate`
+# the gateway_ws bundle). The inverse of provision+orchestrate; idempotent
+# (re-running on an already-clean host is a no-op).
+#
+# What it removes (always):
+#   - the running supervisor (SIGTERM the process; its PDEATHSIG kills children)
+#   - /opt/theia/{bin,lib,config,ipk} — binaries, bundled libs, config, cached .deb
+#   - the dpkg-registered per-machine bundle (dpkg -r <machine>), if installed
+#   - the theia-supervisor.service systemd unit (if the autostart unit is in use)
+#   - theia-etcd.service (the cluster etcd singleton unit), if present
+#
+# What it removes ONLY behind a flag (data you may want to keep):
+#   - wipe_etcd=true   → /var/lib/theia-etcd (the etcd data-dir; config history)
+#   - wipe_mender=true → Mender device identity + the theia-release update module
+#
+# Run:  theia cleanup <target>     ← the wrapper (tools/theia.py)
+#   or:  ansible-playbook cleanup.yml -e target=<target>
+#       (add -e wipe_etcd=true -e wipe_mender=true for a full factory wipe)
+# The target rig is resolved by NAME from deploy/registry/<target>.yml (host +
+# the artheia `machine` slice) — same registry as `theia orchestrate`.
+- name: "Resolve the deploy target from the registry"
+  hosts: localhost
+  gather_facts: false
+  vars:
+    target: "{{ target | mandatory }}"
+    registry_file: "{{ registry_dir }}/{{ target }}.yml"
+  tasks:
+    - name: "Load the target's registry entry (host + machine slice)"
+      ansible.builtin.include_vars:
+        file: "{{ registry_file }}"
+        name: _rig
+    - name: "Add the resolved target as an in-memory host"
+      ansible.builtin.add_host:
+        name: "{{ target }}"
+        groups: _cleanup_targets
+        ansible_host: "{{ _rig.ansible_host }}"
+        ansible_user: "{{ _rig.ansible_user | default('root') }}"
+        machine: "{{ _rig.machine }}"
+
+- name: "Theia cleanup (uninstall the prior stack)"
+  hosts: _cleanup_targets
+  become: true
+  vars:
+    theia_root: /opt/theia
+    wipe_etcd: false
+    wipe_mender: false
+  tasks:
+    - name: "Stop the supervisor (SIGTERM; PDEATHSIG reaps the children)"
+      # Graceful: the supervisor SIGTERMs its tree on receipt. -f matches the
+      # full argv so we don't hit a stray 'supervisor' from another package.
+      ansible.builtin.command: "pkill -TERM -f {{ theia_root }}/bin/supervisor"
+      register: _pk
+      changed_when: _pk.rc == 0
+      failed_when: false            # rc=1 (no match) is fine — nothing running
+
+    - name: "Give the tree a moment to exit, then SIGKILL any stragglers"
+      ansible.builtin.command: "pkill -KILL -f {{ theia_root }}/bin/"
+      register: _pk9
+      changed_when: _pk9.rc == 0
+      failed_when: false
+      # best-effort cleanup of orphaned FCs (pre-PDEATHSIG supervisors leak)
+
+    - name: "Stop + disable theia-supervisor.service (autostart unit), if present"
+      ansible.builtin.systemd:
+        name: theia-supervisor.service
+        state: stopped
+        enabled: false
+      register: _sup_unit
+      failed_when: false            # absent unit → ignore
+
+    - name: "Stop + disable theia-etcd.service (cluster etcd), if present"
+      ansible.builtin.systemd:
+        name: theia-etcd.service
+        state: stopped
+        enabled: false
+      register: _etcd_unit
+      failed_when: false
+
+    - name: "Remove the systemd unit files"
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop:
+        - theia-supervisor.service
+        - theia-etcd.service
+      register: _units_removed
+
+    - name: "Reload systemd after removing units"
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: _units_removed.changed
+
+    - name: "Uninstall the dpkg-registered bundle (dpkg -r <machine>), if any"
+      ansible.builtin.command: "dpkg -r {{ machine }}"
+      register: _dpkg_r
+      changed_when: "'not installed' not in (_dpkg_r.stderr | default(''))"
+      failed_when: false            # not installed (manual unpack) → tolerate
+
+    - name: "Remove the Theia install tree (/opt/theia)"
+      ansible.builtin.file:
+        path: "{{ theia_root }}"
+        state: absent
+
+    - name: "Remove the read-only manifest mount dir (/etc/theia/manifest)"
+      ansible.builtin.file:
+        path: /etc/theia/manifest
+        state: absent
+      failed_when: false
+
+    # ---- flag-gated data wipes -------------------------------------------
+    - name: "Wipe the etcd data-dir (config history) — only with wipe_etcd=true"
+      ansible.builtin.file:
+        path: /var/lib/theia-etcd
+        state: absent
+      when: wipe_etcd | bool
+
+    - name: "Wipe Mender identity + the theia-release module — only with wipe_mender=true"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/mender/device_type
+        - /etc/mender/artifact_info
+        - /usr/share/mender/modules/v3/theia-release
+      when: wipe_mender | bool
+
+    - name: "Report"
+      ansible.builtin.debug:
+        msg: >-
+          Theia removed from {{ inventory_hostname }} ({{ machine }}).
+          etcd data {{ 'WIPED' if wipe_etcd | bool else 'kept' }};
+          Mender {{ 'WIPED' if wipe_mender | bool else 'kept' }}.
+          Run `theia orchestrate {{ machine }}` to install the new bundle.

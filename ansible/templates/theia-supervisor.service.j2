@@ -1,0 +1,36 @@
+# theia-supervisor.service — boot-time autostart for a baremetal rig (an outdoor
+# headless Pi reached only over VPN). Rendered + installed by
+# tasks/install-supervisor-unit.yml. ExecStart calls theia-run.sh (shipped to
+# /opt/theia/bin) so all the strict-env logic (manifest, current/lib LD path)
+# lives in ONE place — the unit just owns the lifecycle (restart, boot order).
+#
+# theia-run.sh REQUIRES $THEIA_ROOT_DIR/current (the release symlink); the
+# supervisor launches each child's ./bin/<svc> from it, and a Mender/UCM OTA flip
+# of current → releases/<ver> + FC restart sticks (the launcher never re-asserts
+# current). The supervisor BINARY stays at /opt/theia/bin/supervisor (the updater).
+#
+# The supervisor sets PR_SET_PDEATHSIG on its children, so a unit stop/restart
+# cleanly tears the whole FC tree down (no orphan sweep needed on c7f5b3b+).
+[Unit]
+Description=Theia supervisor ({{ machine }}) — the ARA Execution Manager
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=THEIA_ROOT_DIR=/opt/theia
+Environment=THEIA_MACHINE={{ machine }}
+# theia-run.sh: require current, set THEIA_SUPERVISOR_MANIFEST + LD_LIBRARY_PATH=
+# $THEIA_ROOT_DIR/current/lib, then exec /opt/theia/bin/supervisor.
+ExecStart=/opt/theia/bin/theia-run
+# Bounded restart: a crash re-execs, but a crash-loop backs off rather than
+# hammering (matches run-supervisor.sh's own bounded re-exec intent).
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+# The supervisor needs the caps setcap already applied to the binary; systemd
+# does not strip file caps for Type=simple, so AmbientCapabilities is not needed.
+
+[Install]
+WantedBy=multi-user.target

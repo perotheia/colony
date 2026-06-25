@@ -1,0 +1,20 @@
+# install-bundle.yml — copy the per-machine .deb to the rig + dpkg --install it.
+# Drops every binary (supervisor + FCs) at /opt/theia/bin/<name>. == orchestration.pp
+# step 1. (.deb preferred; .ipk is the opkg hatch — same ar archive, dpkg installs
+# either.)
+- name: "Copy the per-machine .deb to the rig — {{ machine }}"
+  ansible.builtin.copy:
+    src: "{{ deb_src }}"
+    dest: "{{ theia_root }}/ipk/{{ machine }}.deb"
+    mode: "0644"
+  register: _deb_copied
+
+- name: "Dpkg --install the bundle (--force-overwrite)"
+  ansible.builtin.command:
+    cmd: "dpkg --install --force-overwrite {{ theia_root }}/ipk/{{ machine }}.deb"
+  environment:
+    # dpkg postinst shells out to ldconfig + start-stop-daemon (both /usr/sbin);
+    # a /usr/bin-only PATH makes dpkg abort. Mirror the puppet exec's PATH.
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  register: _dpkg
+  changed_when: _dpkg.rc == 0

@@ -1,0 +1,30 @@
+# os-packages.yml — install the apt os_packages this host declares in machine.json
+# (the Linux daemons the prebuilt Providers fork: linuxptp/chrony/gpsd for tsync,
+# …). etcd-server is filtered out here — it's the cluster singleton (etcd.yml).
+# == provisioning.pp step 1.
+#
+# machine.json lives on the CONTROLLER; read it with from_json. When it's absent
+# (bare bring-up, no emitted manifest) skip — only the etcd special-case runs.
+- name: "Read machine.json (controller-side) — {{ machine }}"
+  ansible.builtin.set_fact:
+    _machine_doc: "{{ lookup('file', machine_json_path) | from_json }}"
+  delegate_to: localhost
+  become: false
+  failed_when: false
+  register: _mj
+
+- name: "Compute apt os_packages (minus etcd-server)"
+  ansible.builtin.set_fact:
+    _apt_pkgs: >-
+      {{ (_machine_doc.machine.os_packages | default([]))
+         | selectattr('source', 'equalto', 'apt')
+         | rejectattr('name', 'equalto', 'etcd-server')
+         | map(attribute='name') | list }}
+  when: _machine_doc is defined
+
+- name: "Apt install os_packages"
+  ansible.builtin.apt:
+    name: "{{ _apt_pkgs }}"
+    state: present
+    update_cache: true
+  when: _apt_pkgs is defined and _apt_pkgs | length > 0

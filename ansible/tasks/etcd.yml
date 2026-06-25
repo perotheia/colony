@@ -1,0 +1,14 @@
+# etcd.yml — install etcd ONLY on the etcd_machine, and only when etcd isn't
+# externally provided (docker compose etcd service / the host's etcd). ONE per
+# cluster. == provisioning.pp step 2.
+#
+# etcd_external is set per-run (-e etcd_external=true) or via a host var; default
+# unset → install on the etcd host.
+- name: "Etcd-server (cluster singleton)"
+  ansible.builtin.apt:
+    name: etcd-server
+    state: present
+    update_cache: true
+  when:
+    - machine == etcd_machine
+    - not (etcd_external | default(false) | bool)

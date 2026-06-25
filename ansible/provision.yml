@@ -1,0 +1,67 @@
+# theia provision — Phase 1: the cheap, stable base. Pushed over SSH from the
+# controller; no agent on the rig.
+#
+# Phases:
+#   1. /opt/theia + /opt/theia/config dirs
+#   2. OS packages from <machine>/machine.json os_packages (apt source, minus
+#      etcd-server which is the cluster singleton below)
+#   3. etcd-server ONLY on the etcd_machine (skip if etcd_external)
+#   4. an EMPTY executor.json (replace=no) so the supervisor boots + supervises
+#      nothing — the Phase-1 checkpoint
+#   5. install + enrol the Mender client (the one persistent agent; OTA only)
+#
+# Run:  ansible-playbook provision.yml -l rpi4
+#       (theia.py `provision <machine>` wraps this, limiting to the host whose
+#        machine= matches)
+- name: "Resolve the deploy target from the registry"
+  hosts: localhost
+  gather_facts: false
+  vars:
+    target: "{{ target | mandatory }}"
+    registry_file: "{{ registry_dir }}/{{ target }}.yml"
+  tasks:
+    - name: "Load the target's registry entry (host + machine slice)"
+      ansible.builtin.include_vars:
+        file: "{{ registry_file }}"
+        name: _rig
+    - name: "Add the resolved target as an in-memory host"
+      ansible.builtin.add_host:
+        name: "{{ target }}"
+        groups: _provision_targets
+        ansible_host: "{{ _rig.ansible_host }}"
+        ansible_user: "{{ _rig.ansible_user | default('root') }}"
+        machine: "{{ _rig.machine }}"
+
+- name: "Theia provision (Phase 1 — base + Mender client)"
+  hosts: _provision_targets
+  become: true
+  vars:
+    theia_root: /opt/theia
+    # the per-host machine.json on the CONTROLLER (read with the from_json filter)
+    machine_json_path: "{{ manifest_dir }}/{{ machine }}/machine.json"
+  tasks:
+    - name: "Base dirs"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ theia_root }}"
+        - "{{ theia_root }}/config"
+
+    - name: "Include OS-package install (from machine.json os_packages)"
+      ansible.builtin.include_tasks: tasks/os-packages.yml
+
+    - name: "Include etcd (cluster singleton)"
+      ansible.builtin.include_tasks: tasks/etcd.yml
+
+    - name: "Seed EMPTY executor.json (never clobber a real tree)"
+      ansible.builtin.copy:
+        dest: "{{ theia_root }}/config/executor.json"
+        force: false            # == puppet replace=false: seed only on greenfield
+        mode: "0644"
+        content: |
+          {"name":"root","children":[]}
+
+    - name: "Include Mender client install + enrol"
+      ansible.builtin.include_tasks: tasks/install-mender.yml

@@ -1,0 +1,53 @@
+# install-tailscale.yml — join the rig to the Tailscale VPN. Included by a deploy
+# play (or run standalone) for a rig that must be reachable over the tunnel
+# (an outdoor Pi reached only over VPN). NM merely OBSERVES the tunnel
+# (vpn_observe → VPN_ESTABLISHED); tailscaled OWNS it. The auth key was written
+# by com's Provision() to certs/vpn.authkey (rig-enroll), or supplied out-of-band.
+#
+# Idempotent: skips `tailscale up` when already Running.
+#
+# Vars:
+#   theia_root          /opt/theia
+#   vpn_authkey_path    where the per-rig auth key lives
+#                       (default /etc/theia/manifest/<machine>/certs/vpn.authkey)
+- name: "Install tailscale (official apt repo script; once)"
+  ansible.builtin.shell:
+    cmd: "curl -fsSL https://tailscale.com/install.sh | sh"
+    creates: /usr/bin/tailscale
+
+- name: "Read the per-rig VPN auth key"
+  ansible.builtin.slurp:
+    src: "{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}"
+  register: _authkey
+  failed_when: false            # no key yet → skip `up` (enroll first)
+
+- name: "Query current tailscale backend state (idempotency guard)"
+  ansible.builtin.command: "tailscale status --json"
+  register: _ts_status
+  changed_when: false
+  failed_when: false
+
+- name: "tailscale up (only if not already Running and a key is present)"
+  # --accept-routes/--accept-dns=false so the tunnel never shadows the rig's LAN
+  # route (the SSH lifeline). No exit node. hostname = the machine name.
+  ansible.builtin.command: >-
+    tailscale up
+    --authkey {{ (_authkey.content | b64decode | trim) }}
+    --accept-routes=false
+    --accept-dns=false
+    --hostname {{ machine }}
+  when:
+    - _authkey.content is defined
+    - '"Running" not in (_ts_status.stdout | default(""))'
+  register: _ts_up
+  changed_when: _ts_up.rc == 0
+
+- name: "Report the rig's Tailscale IP"
+  ansible.builtin.command: "tailscale ip -4"
+  register: _ts_ip
+  changed_when: false
+  failed_when: false
+
+- name: "Tailscale status"
+  ansible.builtin.debug:
+    msg: "{{ machine }} on the tailnet: {{ _ts_ip.stdout | default('(not joined — enroll the authkey first)') }}"

@@ -1,0 +1,31 @@
+# seed-config.yml — write the REAL executor.json (replaces the empty tree Phase 1
+# seeded) + the per-FC static config profiles. == orchestration.pp steps 3 + 3b.
+#
+# `theia manifest` already extracted execution.json.supervisor_tree into a ready
+# executor.json per host AND emitted <machine>/config/<fc>.json (gen-params default
+# deep-merged with deploy/config/<machine>/<fc>.json). We just COPY them. The config
+# dir is what lands the tsync GM-on-central / slave-on-compute split (etc).
+- name: "Copy the REAL executor.json (→ notify supervisor reload)"
+  ansible.builtin.copy:
+    src: "{{ executor_src }}"
+    dest: "{{ theia_root }}/config/executor.json"
+    mode: "0644"
+  notify: "reload supervisor"
+
+- name: "Find the per-FC config profiles on the controller"
+  ansible.builtin.find:
+    paths: "{{ config_src_dir }}"
+    patterns: "*.json"
+  delegate_to: localhost
+  become: false
+  register: _fc_configs
+  failed_when: false           # older manifests have no config/ dir — tolerate
+
+- name: "Copy the per-FC config profiles → /opt/theia/config/"
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ theia_root }}/config/{{ item.path | basename }}"
+    mode: "0644"
+  loop: "{{ _fc_configs.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"

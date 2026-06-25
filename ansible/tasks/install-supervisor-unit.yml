@@ -1,0 +1,41 @@
+# install-supervisor-unit.yml — boot-time autostart for a baremetal rig. Ships
+# theia-run.sh to /opt/theia/bin + installs the theia-supervisor.service unit that
+# exec's it. Use for a headless outdoor Pi (reached only over VPN) that must come
+# up on power-on.
+#
+# theia-run.sh is the OTA-CORRECT launcher: it REQUIRES $THEIA_ROOT_DIR/current
+# (the release symlink the supervisor launches children from) and does NOT
+# re-provision/clobber it — so a Mender/UCM `current → releases/<ver>` flip + FC
+# restart sticks. (run-supervisor.sh, the docker-compose container entrypoint,
+# OWNS + re-asserts `current` on every boot — fatal for OTA; NOT used here.)
+#
+# Run via a deploy play, or:
+#   ansible-playbook orchestrate.yml -l <host> -e machine=<m> -e autostart=true
+- name: "Ship theia-run.sh (the OTA-correct launcher) to the rig"
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../theia-run.sh"
+    dest: /opt/theia/bin/theia-run
+    mode: "0755"
+
+- name: "Render the theia-supervisor.service unit"
+  ansible.builtin.template:
+    src: templates/theia-supervisor.service.j2
+    dest: /etc/systemd/system/theia-supervisor.service
+    mode: "0644"
+  register: _unit
+
+- name: "Reload systemd + enable the unit"
+  ansible.builtin.systemd:
+    name: theia-supervisor.service
+    daemon_reload: true
+    enabled: true
+
+- name: "Start (or restart on unit OR binary change) the supervisor"
+  # Restart when the unit file changed OR the .deb was (re)installed (_dpkg from
+  # install-bundle.yml) — a new binary on disk does nothing until the supervisor
+  # re-execs it. `started` alone is a no-op on an already-running supervisor, so
+  # a binary-only redeploy would silently keep running the OLD binary. The tdb-
+  # reload handler only re-reads the manifest, not the binaries.
+  ansible.builtin.systemd:
+    name: theia-supervisor.service
+    state: "{{ 'restarted' if (_unit.changed or (_dpkg is defined and _dpkg.changed)) else 'started' }}"
