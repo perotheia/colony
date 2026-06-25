@@ -5,29 +5,46 @@
 # builds without a GitHub release. The theia-runtime bucket is anonymously
 # readable, so the rig pulls over plain HTTP (get_url) — NO aws cli on the device.
 #
+# AUTHORITATIVE OBJECT LIST = <ver>/index.json. The seeder (ground-station
+# seed-official.sh) names the debs by their dpkg-native filename
+# (theia-runtime_<ver>_<arch>.deb) and records the exact keys + sha256 in
+# index.json. We read it on the rig and pull exactly what it lists — so this task
+# never has to reconstruct the filename (version-in-name vs not, etc.) and the
+# sha256 is verified end-to-end.
+#
 # Vars (registry / -e):
 #   runtime_version   the <ver> under theia-runtime/<ver>/  (e.g. 0.2.0)
 #   s3_endpoint       MinIO URL reachable from the rig (e.g. http://10.0.0.99:9000)
 #   s3_runtime_bucket default "theia-runtime"
-#   deb_arch          default "amd64"
 - name: "Ensure /opt/theia/ipk exists"
   ansible.builtin.file:
     path: "{{ theia_root }}/ipk"
     state: directory
     mode: "0755"
 
-- name: "Fetch runtime + services .debs from S3 ({{ s3_runtime_bucket | default('theia-runtime') }}/{{ runtime_version }})"
+- name: "Fetch the runtime plane index ({{ s3_runtime_bucket | default('theia-runtime') }}/{{ runtime_version }}/index.json)"
+  ansible.builtin.uri:
+    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/{{ runtime_version }}/index.json"
+    return_content: true
+  register: _runtime_index
+
+- name: "Resolve the deb object list from the index"
+  ansible.builtin.set_fact:
+    _runtime_debs: "{{ (_runtime_index.content | from_json).debs }}"
+
+- name: "Fetch runtime + services .debs from S3 (sha256-checked)"
   ansible.builtin.get_url:
-    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/{{ runtime_version }}/{{ item }}"
-    dest: "{{ theia_root }}/ipk/{{ item }}"
+    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/{{ item.file }}"
+    dest: "{{ theia_root }}/ipk/{{ item.file | basename }}"
+    checksum: "sha256:{{ item.sha256 }}"
     mode: "0644"
-  loop:
-    - "theia-runtime_{{ deb_arch | default('amd64') }}.deb"
-    - "theia-services_{{ deb_arch | default('amd64') }}.deb"
+  loop: "{{ _runtime_debs }}"
+  loop_control:
+    label: "{{ item.file | basename }}"
 
 - name: "Dpkg --install runtime + services (--force-overwrite)"
   ansible.builtin.command:
-    cmd: "dpkg --install --force-overwrite {{ theia_root }}/ipk/theia-runtime_{{ deb_arch | default('amd64') }}.deb {{ theia_root }}/ipk/theia-services_{{ deb_arch | default('amd64') }}.deb"
+    cmd: "dpkg --install --force-overwrite {{ _runtime_debs | map(attribute='file') | map('basename') | map('regex_replace', '^', theia_root + '/ipk/') | join(' ') }}"
   environment:
     PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   register: _dpkg

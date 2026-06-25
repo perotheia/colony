@@ -41,6 +41,13 @@
         ansible_user: "{{ _rig.ansible_user | default('root') }}"
         machine: "{{ _rig.machine }}"
         deploy_target: "{{ target }}"
+        # S3 runtime plane — propagate so the orchestrate play picks the S3-pull
+        # path (install-runtime-s3.yml) instead of the local bundle. Empty/unset
+        # runtime_version falls back to the local dist/<rig>/<rig>.deb.
+        runtime_version: "{{ _rig.runtime_version | default('') }}"
+        s3_endpoint: "{{ _rig.s3_endpoint | default('') }}"
+        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default('theia-runtime') }}"
+        deb_arch: "{{ _rig.deb_arch | default('amd64') }}"
 
 - name: "Theia orchestrate (Phase 2 — binaries + real config)"
   hosts: _orchestrate_targets
@@ -82,6 +89,14 @@
     - name: "Install runtime+services from the local bundle (.deb → /opt/theia/bin)"
       ansible.builtin.include_tasks: tasks/install-bundle.yml
       when: runtime_version is not defined or runtime_version | length == 0
+
+    # Lay the OTA-correct release-dir layout (releases/<ver>/bin + current symlink)
+    # the strict supervisor requires. The .debs install flat to bin/; this relocates
+    # the child binaries under current/. Only on the S3 path (runtime_version set) —
+    # the local-bundle path stages its own layout. Skipped if no version is pinned.
+    - name: "Include release-dir staging (current -> releases/<ver>)"
+      ansible.builtin.include_tasks: tasks/stage-release.yml
+      when: runtime_version is defined and runtime_version | length > 0
 
     - name: "Include setcap (the capability contract)"
       ansible.builtin.include_tasks: tasks/setcap.yml

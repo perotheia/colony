@@ -37,32 +37,50 @@
   loop_control:
     label: "{{ item.path }}"
 
+# The theia-release update module + the Mender→UCM state scripts are ON-DEVICE
+# FIELD ARTIFACTS that ship in the runtime .deb (repo split: deploy/mender/ stays
+# in theia, lands via the runtime package in orchestrate Phase 2). They are NOT a
+# colony asset. For a controller that DOES have them locally (a dev box with the
+# theia checkout), set `mender_artifacts_dir` to deploy/mender/ to pre-push them;
+# otherwise this step is skipped and the runtime .deb is the source of truth.
+- name: "Discover an OPTIONAL local source for the Mender on-device artifacts"
+  ansible.builtin.stat:
+    path: "{{ mender_artifacts_dir | default('') }}/modules/theia-release"
+  delegate_to: localhost
+  become: false
+  register: _mender_mod_src
+  when: mender_artifacts_dir is defined and mender_artifacts_dir | length > 0
+
 - name: "Ensure the custom update-module dir"
   ansible.builtin.file:
     path: /usr/share/mender/modules/v3
     state: directory
     mode: "0755"
+  when: _mender_mod_src.stat.exists | default(false)
 
-- name: "Push the theia-release update module (release-dir + symlink, NOT A/B)"
+- name: "Pre-push the theia-release update module (dev controller only; else from the .deb)"
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../mender/modules/theia-release"
+    src: "{{ mender_artifacts_dir }}/modules/theia-release"
     dest: /usr/share/mender/modules/v3/theia-release
     mode: "0755"
+  when: _mender_mod_src.stat.exists | default(false)
 
 - name: "Ensure the Mender scripts dir"
   ansible.builtin.file:
     path: /etc/mender/scripts
     state: directory
     mode: "0755"
+  when: _mender_mod_src.stat.exists | default(false)
 
-- name: "Push the Mender→UCM state script + the UCM adopter it calls"
+- name: "Pre-push the Mender→UCM state script + the UCM adopter (dev controller only)"
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../mender/state-scripts/{{ item }}"
+    src: "{{ mender_artifacts_dir }}/state-scripts/{{ item }}"
     dest: "/etc/mender/scripts/{{ item }}"
     mode: "0755"
   loop:
     - ArtifactInstall_Leave_01_ucm-request   # the Mender hook
     - ucm-adopt.py                            # hands the landed release to UCM
+  when: _mender_mod_src.stat.exists | default(false)
 
 # Tailscale/VPN enrolment is its OWN flow (tools/rig-enroll over com gRPC) — not
 # here. This task only lands the OTA agent + the theia-release customization.
