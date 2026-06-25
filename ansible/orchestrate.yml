@@ -72,8 +72,16 @@
         - "{{ theia_root }}/config"
         - "{{ theia_root }}/ipk"
 
-    - name: "Include bundle install (.deb → /opt/theia/bin)"
+    # Runtime+services source: PULL FROM S3 (theia-runtime/<runtime_version>) when
+    # runtime_version is set (the fleet flow — official tag or dev rc, no local deb
+    # needed); else the legacy local-bundle path (dist/manifest/<rig>/<rig>.deb).
+    - name: "Install runtime+services FROM S3 (runtime_version pinned)"
+      ansible.builtin.include_tasks: tasks/install-runtime-s3.yml
+      when: runtime_version is defined and runtime_version | length > 0
+
+    - name: "Install runtime+services from the local bundle (.deb → /opt/theia/bin)"
       ansible.builtin.include_tasks: tasks/install-bundle.yml
+      when: runtime_version is not defined or runtime_version | length == 0
 
     - name: "Include setcap (the capability contract)"
       ansible.builtin.include_tasks: tasks/setcap.yml
