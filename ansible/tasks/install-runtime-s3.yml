@@ -1,0 +1,44 @@
+# install-runtime-s3.yml — install the Theia RUNTIME + SERVICES on the rig by
+# pulling the .debs from the MinIO runtime plane (s3://theia-runtime/<ver>/), NOT
+# from a local bundle. This is the FACTORY runtime install: the rig is provisioned
+# with the runtime version pinned by `runtime_version` (an official tag OR a dev rc
+# like 0.2.1-rc1), so the field loop can test non-official builds without a GitHub
+# release. The rig reaches the GW MinIO over the DMZ (s3_endpoint, default the GW's
+# :9000). After this, colony's executor.json + config seed lays the supervised tree.
+#
+# Vars (from the registry / -e):
+#   runtime_version   the <ver> under s3://theia-runtime/<ver>/  (e.g. 0.2.0)
+#   s3_endpoint       MinIO S3 URL reachable from the rig (e.g. http://10.0.0.99:9000)
+#   s3_runtime_bucket default "theia-runtime"
+#   s3_access_key / s3_secret_key  MinIO creds (DMZ — default the dev creds)
+- name: "Ensure /opt/theia/ipk exists"
+  ansible.builtin.file:
+    path: "{{ theia_root }}/ipk"
+    state: directory
+    mode: "0755"
+
+- name: "Fetch the runtime + services .debs from S3 (theia-runtime/{{ runtime_version }})"
+  # The rig pulls each .deb from MinIO via a presigned-free anonymous-or-keyed GET.
+  # MinIO serves S3 path-style; with creds, sign via the aws cli on the rig, else a
+  # public-read bucket allows a plain get_url. Default path: aws cli (creds in DMZ).
+  ansible.builtin.shell:
+    cmd: >
+      AWS_ACCESS_KEY_ID='{{ s3_access_key | default("theia") }}'
+      AWS_SECRET_ACCESS_KEY='{{ s3_secret_key | default("theiaminio") }}'
+      AWS_DEFAULT_REGION=us-east-1
+      aws --endpoint-url '{{ s3_endpoint }}' s3 cp
+      s3://{{ s3_runtime_bucket | default("theia-runtime") }}/{{ runtime_version }}/{{ item }}
+      {{ theia_root }}/ipk/{{ item }}
+  loop:
+    - "theia-runtime_{{ deb_arch | default('amd64') }}.deb"
+    - "theia-services_{{ deb_arch | default('amd64') }}.deb"
+  register: _s3_fetch
+  changed_when: true
+
+- name: "Dpkg --install the runtime + services (--force-overwrite)"
+  ansible.builtin.command:
+    cmd: "dpkg --install --force-overwrite {{ theia_root }}/ipk/theia-runtime_{{ deb_arch | default('amd64') }}.deb {{ theia_root }}/ipk/theia-services_{{ deb_arch | default('amd64') }}.deb"
+  environment:
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  register: _dpkg
+  changed_when: _dpkg.rc == 0
