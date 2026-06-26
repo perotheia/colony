@@ -41,16 +41,16 @@ ctl()  { docker exec ota-controller bash -lc "$*"; }
 bcur() { docker exec "ota-$1" readlink /opt/theia/current 2>/dev/null || echo NONE; }
 bfc()  { docker exec "ota-$1" sh -c 'ps -eo args 2>/dev/null | grep -c "/opt/theia/current/bin/[a-z]"' 2>/dev/null || echo 0; }
 # colony verb via the controller, pointed at the test registry + theia bundle
-CENV="THEIA_WORKSPACE=/repo/theia COLONY_ANSIBLE=/repo/colony/ansible"
-REG="/repo/colony/test/ota-e2e/registry"; MAN="/repo/theia/dist/manifest"
+CENV="THEIA_WORKSPACE=/repo/theia/demo COLONY_ANSIBLE=/repo/colony/ansible"
+REG="/repo/colony/test/ota-e2e/registry"; MAN="/repo/theia/demo/dist/manifest"
 colony() { ctl "$CENV /repo/colony/bin/colony $1 $2 -e registry_dir=$REG -e manifest_dir=$MAN ${3:-}"; }
 
 ###############################################################################
 log "PHASE 0 — build (FCs + demo apps + manifests + role artifacts)"
 ###############################################################################
 if [ "$DO_BUILD" = 1 ]; then "$HERE/build-artifacts.sh"; else ok "skip build (--no-build)"; fi
-[ -f "$THEIA_DIR/dist/manifest/central/central.deb" ] || die "no central.deb (build first)"
-[ -f "$THEIA_DIR/dist/roles/central-0.2.1.mender" ]   || die "no central-0.2.1.mender"
+[ -f "$THEIA_DIR/demo/dist/manifest/central/central.deb" ] || die "no central.deb (build first)"
+[ -f "$THEIA_DIR/demo/dist/roles/central-0.2.1.mender" ]   || die "no central-0.2.1.mender"
 ok "build artifacts present"
 
 ###############################################################################
@@ -99,8 +99,14 @@ for b in central compute; do
   colony orchestrate "$b" "-e autostart=true" || die "orchestrate $b failed"
 done
 sleep 8
+# demo split: central = 15 services MINUS nm (run_on_start=false) → 14 booted;
+# compute = p1-p4 + shwa → 5. Use lower bounds (a flaky FC shouldn't fail the whole
+# run on an off-by-one) and assert nm is NOT running on central (the safety gate).
 [ "$(bfc central)" -ge 10 ] || die "central FC count $(bfc central) < 10"
-[ "$(bfc compute)" -eq 2 ]  || die "compute FC count $(bfc compute) != 2"
+[ "$(bfc compute)" -ge 4 ]  || die "compute FC count $(bfc compute) < 4 (expect p1-p4+shwa)"
+docker exec ota-central sh -c 'ps -eo args | grep -q "/opt/theia/current/bin/nm"' \
+  && die "nm IS running on central — run_on_start=false not honored (SSH-lockout risk)" \
+  || ok "nm correctly NOT booted on central (run_on_start=false)"
 ok "provision+orchestrate: central=$(bfc central) FCs, compute=$(bfc compute) FCs"
 
 ###############################################################################

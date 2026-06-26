@@ -6,7 +6,7 @@
 set -euo pipefail
 ROLE="${1:?role}"; VER="${2:?ver}"
 THEIA_DIR="${THEIA_DIR:-$(cd "$(dirname "$0")/../../../../theia" && pwd)}"
-SRC="$THEIA_DIR/dist/roles/${ROLE}-${VER}.mender"
+SRC="${DIST_ROOT:-$THEIA_DIR/demo/dist}/roles/${ROLE}-${VER}.mender"
 [ -f "$SRC" ] || { echo "no $SRC to stamp" >&2; exit 1; }
 MA="$(command -v mender-artifact-wrap || command -v mender-artifact)"
 

@@ -11,7 +11,7 @@ set -euo pipefail
 IP="${1:?server ip}"; EMAIL="${2:?email}"; PASS="${3:?pass}"
 ART_CENTRAL="${4:-}"; ART_COMPUTE="${5:-}"
 API="https://$IP/api/management"
-ROLES="$(cd "$(dirname "$0")/../../../theia/dist/roles" 2>/dev/null && pwd || echo /repo/theia/dist/roles)"
+ROLES="${ROLES_DIR:-/repo/theia/demo/dist/roles}"
 FLEET="/repo/ground-station/fleet/fleet.py"
 
 jwt() { curl -sk -u "$EMAIL:$PASS" -X POST "$API/v1/useradm/auth/login"; }

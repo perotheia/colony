@@ -17,8 +17,19 @@ on an isolated Docker bridge so it is reproducible in CI.
 | --- | --- |
 | `mender-server` | the OSS Mender server stack (brought up by `ground-station/mender/server/up.sh`, joined to the test network as `docker.mender.io`) |
 | `ota-controller` | the dev-box/dalek controller — runs colony ansible, `enroll-rig.sh`, `fleet.py` |
-| `ota-central` | a Theia rig (systemd) — gets the 14-FC services slice + etcd + mender-gateway |
-| `ota-compute` | a Theia rig (systemd) — gets the 2-FC (ucm + shwa) slice |
+| `ota-central` | a Theia rig (systemd) — the demo services slice (com/per/sm/phm/…); **nm runs `run_on_start:false`** so it can't reconfigure the shared host net iface |
+| `ota-compute` | a Theia rig (systemd) — the demo apps `p1`–`p4` + `shwa` |
+
+Built from the **demo workspace** (`demo/manifest/split/rig.py`), so the OTA payload
+is the full demo release (services + demo apps), and `nm` lands on central — which
+exercises the `run_on_start:false` boot-skip (a HW node that would otherwise tear
+down the SSH/management interface).
+
+**Host networking** (not a bridge): so host-side `tdb` / `rtdb` / the artheia probe
+reach the stack's nodes over raw TIPC, and the two boards share one host TIPC
+namespace (disambiguated by `machine_instance` 0/1). Ansible reaches the boards via
+the `community.docker.docker` connection (docker exec) — on host net two sshd's
+can't both bind :22. etcd is treated as external (the runner's etcd on :2379).
 
 Boards run **systemd as PID 1** (the real flow installs systemd units), so they
 need `--privileged` + the cgroup mount — the compose file sets this.

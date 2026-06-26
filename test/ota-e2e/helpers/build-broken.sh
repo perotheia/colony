@@ -9,7 +9,7 @@ THEIA_DIR="${THEIA_DIR:-$(cd "$(dirname "$0")/../../../../theia" && pwd)}"
 MA="$(command -v mender-artifact-wrap || command -v mender-artifact)"
 [ -n "$MA" ] || { echo "mender-artifact not found" >&2; exit 1; }
 
-OUT="$THEIA_DIR/dist/roles/${ROLE}-${VER}-broken.mender"
+OUT="${DIST_ROOT:-$THEIA_DIR/demo/dist}/roles/${ROLE}-${VER}-broken.mender"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 echo "${ROLE}-${VER}" > "$WORK/version.txt"
 echo "THIS IS NOT A VALID TARBALL — deliberate fail for the rollback test" \

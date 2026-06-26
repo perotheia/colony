@@ -1,44 +1,59 @@
 #!/usr/bin/env bash
-# build-artifacts.sh — produce everything the OTA e2e run consumes, from source.
+# build-artifacts.sh — produce everything the OTA e2e run consumes, from the DEMO
+# workspace (services on central + the demo apps p1-p4 + shwa on compute). This is
+# the canonical demo split, so the OTA payload is the FULL demo release (services +
+# apps), and nm lands on central — exercising run_on_start=false.
 #
-#   dist/manifest/{central,compute}/        the DOCKER (x86) split + per-machine .deb
-#   dist/roles/{central,compute}-0.2.1.mender   the FIRST-install role artifacts
-#   dist/roles/{central,compute}-0.2.2.mender   the UPDATE role artifacts
-#   dist/roles/central-0.2.3-broken.mender      the deliberate-fail (corrupt payload)
+#   demo/dist/manifest/{central,compute}/         the DOCKER (x86) split + .deb
+#   demo/dist/roles/{central,compute}-0.2.1.mender   first-install role artifacts
+#   demo/dist/roles/{central,compute}-0.2.2.mender   the update
+#   demo/dist/roles/central-0.2.3-broken.mender      the rollback test
 #
-# All x86_64 / gzip (the portable artifact compression — boards may lack zstd).
-# This is the HEAVY stage (bazel builds the FC binaries); CI caches the bazel tree.
-#
-# Run from anywhere; operates on $THEIA_DIR (default: sibling ../../../theia).
+# x86_64 / gzip (portable). The bazel build is the heavy stage; CI caches it.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 THEIA_DIR="${THEIA_DIR:-$(cd "$HERE/../../../theia" && pwd)}"
-cd "$THEIA_DIR"
+DEMO_DIR="$THEIA_DIR/demo"
 export PATH="$THEIA_DIR/.venv/bin:$PATH"
-
-ARCH="host"                 # x86_64 native (the DOCKER attr)
+export THEIA_WORKSPACE="$DEMO_DIR"
+export ARTIFACT_COMPRESS=gzip          # portable — boards may lack zstd
+ARCH="host"
 log() { printf '\n[build] %s\n' "$*"; }
 
-# ── 1. the DOCKER split manifest (x86 central+compute) + per-machine .deb ──────
-log "serialize the DOCKER split manifest"
-artheia serialize-manifest manifest.services.split_rig --attr DOCKER --out dist/manifest
+cd "$DEMO_DIR"
 
-log "build the per-machine .deb bundles (theia dist — bazel)"
-# theia dist builds the per-host .deb from dist/manifest JSON. host arch.
+# ── 1. the DOCKER split manifest (services on central, demo apps on compute) ──
+log "theia manifest split --attr DOCKER (demo workspace)"
+theia manifest split --attr DOCKER || { echo "[build] manifest failed" >&2; exit 1; }
+
+# Mark nm run_on_start=false in central's executor.json — nm would reconfigure the
+# host's net iface in a shared-namespace container and break the run. The supervisor
+# honors run_on_start=false (defined-but-not-booted). Patch the emitted tree.
+log "patch nm → run_on_start:false in central/executor.json"
+python3 - "$DEMO_DIR/dist/manifest/central/executor.json" <<'PY'
+import json, sys
+p = sys.argv[1]; t = json.load(open(p))
+def patch(n):
+    if n.get("type") == "worker" and n.get("name") == "nm":
+        n["run_on_start"] = False
+    for c in n.get("children", []): patch(c)
+patch(t)
+json.dump(t, open(p, "w"), indent=2)
+print("  nm run_on_start=false set")
+PY
+
+# ── 2. per-machine .deb bundles (theia dist — bazel) ──
+log "theia dist (per-machine .deb — bazel, heavy)"
 theia dist || { echo "[build] theia dist failed" >&2; exit 1; }
-# the .deb lands under bazel-bin or dist/manifest/<m>/<m>.deb depending on the rule;
-# normalize to dist/manifest/<m>/<m>.deb (what install-bundle.yml's deb_src expects).
 for m in central compute; do
   if [ ! -f "dist/manifest/$m/$m.deb" ]; then
-    found="$(find dist bazel-bin -name "$m*.deb" 2>/dev/null | head -1 || true)"
-    [ -n "$found" ] && cp "$found" "dist/manifest/$m/$m.deb"
+    f="$(find dist bazel-bin -name "$m*.deb" 2>/dev/null | head -1 || true)"
+    [ -n "$f" ] && cp "$f" "dist/manifest/$m/$m.deb"
   fi
 done
 
-# ── 2. the role .mender artifacts (first-install 0.2.1, update 0.2.2) ──────────
-# Force gzip (portable). release-role builds the role tree from the services .deb.
-export ARTIFACT_COMPRESS=gzip
+# ── 3. the role .mender artifacts (first-install 0.2.1, update 0.2.2) ──
 for ver in 0.2.1 0.2.2; do
   for role in central compute; do
     log "pack $role-$ver.mender (theia-release, gzip)"
@@ -46,16 +61,13 @@ for ver in 0.2.1 0.2.2; do
       || { echo "[build] release-role $role-$ver failed" >&2; exit 1; }
   done
 done
-
-# Make 0.2.2 genuinely DIFFER from 0.2.1 (a real update, not a no-op) by stamping
-# a release-notes marker the assert step can see. release-role rebuilds the tree
-# per call, so add the marker via a tiny repack of the 0.2.2 artifacts.
+# make 0.2.2 differ from 0.2.1 (a real update)
 "$HERE/helpers/stamp-version.sh" central 0.2.2
 "$HERE/helpers/stamp-version.sh" compute 0.2.2
 
-# ── 3. the deliberately-broken artifact (corrupt tarball → install fails) ──────
-log "pack central-0.2.3-broken.mender (corrupt payload → rollback test)"
+# ── 4. the deliberately-broken artifact (rollback test) ──
+log "pack central-0.2.3-broken.mender"
 "$HERE/helpers/build-broken.sh" central 0.2.3
 
-log "done — artifacts under $THEIA_DIR/dist/{manifest,roles}/"
-ls -la dist/roles/*.mender
+log "done — artifacts under $DEMO_DIR/dist/{manifest,roles}/"
+ls -la "$DEMO_DIR"/dist/roles/*.mender
