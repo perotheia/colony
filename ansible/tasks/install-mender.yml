@@ -6,10 +6,12 @@
 # Theia does NOT use Mender's rootfs A/B; the theia-release module lands releases
 # as /opt/theia/releases/<ver> + a `current` symlink switch (see deploy/mender/).
 
-# Add the Mender apt repo FIRST — the distro package is too old to parse modern
-# Mender artifacts (Ubuntu focal ships mender-client 2.1.2 which fails on a
-# mender-artifact 3.11 .mender: "type_info provides values not yet supported").
-# The Mender repo offers 3.5.x, which UCM's standalone `mender install` needs.
+# Add the Mender apt repo FIRST. We install the 4.x client (mender-update +
+# mender-auth), NOT the legacy mender-client: the server v4.0.1 deployments API
+# (server-enrolled OTA) needs the 4.x update/auth split, and `mender-update install`
+# is what UCM's standalone path drives. The old mender-client (2.x/3.x) both fails
+# on modern artifacts AND *conflicts* with mender-auth at the dpkg level, so it must
+# be removed before the 4.x stack installs cleanly.
 - name: "Trust the Mender apt signing key"
   ansible.builtin.get_url:
     url: https://downloads.mender.io/repos/debian/gpg
@@ -27,12 +29,25 @@
   become: true
   failed_when: false
 
-- name: "Install mender-client (Mender repo if reachable, else distro)"
+# Retire the legacy mender-client: it conflicts with mender-auth (dpkg "conflicts
+# with mender-client"), so leaving it installed makes the 4.x install fail. Purge
+# is idempotent (a no-op when absent).
+- name: "Remove the legacy mender-client (conflicts with mender-auth 4.x)"
   ansible.builtin.apt:
     name: mender-client
+    state: absent
+    purge: true
+  become: true
+  failed_when: false
+
+- name: "Install the 4.x Mender client (mender-update + mender-auth)"
+  ansible.builtin.apt:
+    name:
+      - mender-update
+      - mender-auth
     state: present
     update_cache: true
-  failed_when: false          # the postinst service-enable can fail (standalone — no agent); tolerate
+  failed_when: false          # offline rig (no repo reach) — tolerate; enroll-rig.sh seeds the debs
   register: _mender_apt
 
 - name: "Ensure the Mender state dirs"
