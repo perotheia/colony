@@ -39,6 +39,10 @@
         groups: _orchestrate_targets
         ansible_host: "{{ _rig.ansible_host }}"
         ansible_user: "{{ _rig.ansible_user | default('root') }}"
+        # Optional transport overrides (non-standard SSH port / non-SSH connection)
+        # — see provision.yml. Default SSH:22.
+        ansible_port: "{{ _rig.ansible_port | default(omit) }}"
+        ansible_connection: "{{ _rig.ansible_connection | default(omit) }}"
         machine: "{{ _rig.machine }}"
         deploy_target: "{{ target }}"
         # S3 runtime plane — propagate so the orchestrate play picks the S3-pull

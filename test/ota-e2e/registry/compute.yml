@@ -1,16 +1,17 @@
 # OTA e2e test registry — compute (the updatable domain board container).
-ansible_host: compute
+# Reached via the docker connection (exec into ota-compute). Shares the host TIPC
+# namespace with central; machine_instance 1 keeps its node addresses distinct.
+ansible_host: ota-compute
+ansible_connection: community.docker.docker
 ansible_user: root
 machine: compute
 arch: x86_64
 deb_arch: amd64
 
-# No runtime_version → local bundle (dist/manifest/compute/compute.deb).
-
 mender_role: agent
-mender_proxy_host: central
-tipc_central_host: central
+# central's etcd + services are on the same host net → localhost.
+mender_proxy_host: 127.0.0.1
+tipc_central_host: 127.0.0.1
 
 tipc_scope: cluster
-tipc_bearer: eth0
 machine_instance: 1

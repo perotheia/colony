@@ -4,30 +4,31 @@
 # provision -> enroll -> install -> update -> rollback flow runs hermetically in
 # CI. It is a SYSTEMD container on purpose: the real flow installs systemd units
 # (theia-supervisor, mender-authd, mender-updated, theia-tipc-bearer), so the test
-# must exercise systemd, not a fake init. Run with --privileged (or the cgroup +
-# /sys mounts the compose file sets) so systemd can boot.
+# must exercise systemd, not a fake init. Run with --privileged + the cgroup mount
+# (the compose file sets this) so systemd can boot.
 #
 # It starts EMPTY (no Theia binaries) — the controller pushes everything in via
-# colony ansible, exactly like a real greenfield board. Only the prerequisites
-# the board ships from the factory are baked here: sshd (ansible transport),
-# the 4.x mender client, zstd, python3, TIPC + libcap tooling.
+# colony ansible, exactly like a real greenfield board. Only factory prerequisites
+# are baked: the 4.x mender client, zstd, python3, TIPC + libcap tooling.
+#
+# NO sshd: on HOST networking two board containers can't both bind :22, and ansible
+# reaches them via the `community.docker.docker` connection (docker exec) instead —
+# the controller mounts the docker socket. Simpler, and no keys/ports to manage.
 FROM debian:bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# systemd as PID 1 + the runtime prereqs. The mender 4.x client (mender-update +
-# mender-auth) comes from Mender's apt repo — matching colony install-mender.yml.
+# systemd as PID 1 + the runtime prereqs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv dbus \
-        openssh-server sudo ca-certificates curl gnupg \
+        sudo ca-certificates curl gnupg \
         python3 python3-minimal \
         iproute2 libcap2-bin tar gzip zstd \
         procps net-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Mender apt repo + the 4.x client (mender-update drives `mender install`; the
-# server-enrolled deployments API needs the 4.x update/auth split). Purge any
-# legacy mender-client first (it conflicts with mender-auth) — same contract as
+# server-enrolled deployments API needs the 4.x update/auth split) — matching
 # colony's install-mender.yml.
 RUN install -d /etc/apt/keyrings \
     && curl -fsSL https://downloads.mender.io/repos/debian/gpg \
@@ -37,18 +38,6 @@ RUN install -d /etc/apt/keyrings \
     && apt-get update \
     && apt-get install -y --no-install-recommends mender-update mender-auth \
     && rm -rf /var/lib/apt/lists/*
-
-# SSH: a CI test key (baked; this image is throwaway, never published). The
-# controller authenticates as root over this key. Password auth off.
-RUN mkdir -p /root/.ssh /run/sshd \
-    && sed -i 's/#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
-    && sed -i 's/#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-COPY keys/ci_ed25519.pub /root/.ssh/authorized_keys
-RUN chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
-
-# Enable sshd under systemd; the supervisor/mender units are installed at deploy
-# time by colony, not baked.
-RUN systemctl enable ssh
 
 # systemd needs these for a container boot.
 STOPSIGNAL SIGRTMIN+3

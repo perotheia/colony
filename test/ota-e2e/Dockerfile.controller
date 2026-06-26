@@ -1,24 +1,44 @@
 # Dockerfile.controller — the deploy controller for the OTA e2e test.
 #
-# Stands in for the dev box / dalek controller: it runs colony's ansible
-# (provision/orchestrate over SSH), enroll-rig.sh, and fleet.py (Mender
-# Management API). It does NOT run Theia — it drives the board containers.
+# Stands in for the dev-box / dalek controller: runs colony's ansible
+# (provision/orchestrate via the docker connection), enroll-rig.sh, and fleet.py
+# (Mender Management API). It does NOT run Theia — it drives the board containers.
 #
-# The repos it needs (colony, theia, ground-station) are bind-mounted at run time
-# by the compose file, so this image only bakes the toolchain (ansible, ssh,
-# python, mender-artifact) + the CI SSH private key.
+# Ansible reaches the boards with the community.docker.docker connection (docker
+# exec), so this image needs the docker CLI + the community.docker collection and
+# the docker socket (mounted by the compose file). The repos (colony, theia,
+# ground-station) are bind-mounted at run time.
 FROM debian:bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ansible openssh-client ca-certificates curl jq \
+        openssh-client ca-certificates curl jq gnupg \
         python3 python3-pip \
-        tar gzip zstd \
     && rm -rf /var/lib/apt/lists/*
 
-# mender-artifact (the .mender packer build-artifact.sh shells out to). The static
-# linux/amd64 binary from Mender's release bucket — pinned.
+# ansible-core from pip: debian's `ansible` (2.14) is too old for current
+# community.docker (needs >=2.16). Pin a modern core.
+RUN pip3 install --break-system-packages "ansible-core>=2.16" || pip3 install "ansible-core>=2.16"
+
+# The MODERN docker CLI (docker-ce-cli) from Docker's official repo — debian's
+# `docker.io` ships an API-1.41 client that a Docker-29 host daemon (min API 1.44)
+# rejects, which breaks the ansible docker connection. Install the CLI only (no
+# daemon — we talk to the host's daemon over the mounted socket).
+RUN install -m0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" \
+       > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# Collections colony's playbooks use: community.docker (the connection plugin) +
+# community.general (modprobe, etc).
+RUN ansible-galaxy collection install community.docker community.general
+RUN pip3 install --break-system-packages docker || pip3 install docker
+
+# mender-artifact (the .mender packer build-artifact.sh shells out to), pinned.
 ARG MENDER_ARTIFACT_VER=3.11.2
 RUN curl -fsSL "https://downloads.mender.io/repos/debian/pool/main/m/mender-artifact/mender-artifact_${MENDER_ARTIFACT_VER}-1%2Bdebian%2Bbookworm_amd64.deb" \
         -o /tmp/mender-artifact.deb \
@@ -26,14 +46,5 @@ RUN curl -fsSL "https://downloads.mender.io/repos/debian/pool/main/m/mender-arti
     && rm -f /tmp/mender-artifact.deb /var/lib/apt/lists/* \
     && command -v mender-artifact && mender-artifact --version || echo "mender-artifact pending"
 
-# CI SSH private key — reaches the board containers as root. Throwaway, baked into
-# this throwaway image only.
-RUN mkdir -p /root/.ssh
-COPY keys/ci_ed25519 /root/.ssh/id_ed25519
-RUN chmod 700 /root/.ssh && chmod 600 /root/.ssh/id_ed25519 \
-    && printf 'Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n' > /root/.ssh/config
-
 WORKDIR /work
-# The driver script is mounted/copied at run time; keep the container alive so the
-# test harness can `exec` steps into it (mirrors how a human drives the flow).
 CMD [ "sleep", "infinity" ]
