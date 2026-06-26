@@ -47,8 +47,11 @@
     # runtime .deb. Default to the framework checkout (manifest_dir is
     # <ws>/dist/manifest, so deploy/mender is three dirs up + deploy/mender), so
     # `mender install` finds the theia-release module on every board. Override with
-    # -e mender_artifacts_dir=<abs> if the controller's layout differs.
-    mender_artifacts_dir: "{{ mender_artifacts_dir | default(manifest_dir + '/../../deploy/mender', true) }}"
+    # -e mender_artifacts_dir=<abs> if the controller's layout differs (an extra-var
+    # wins over this play var, so we must NOT self-reference mender_artifacts_dir
+    # here — `{{ mender_artifacts_dir | default(...) }}` is a recursive-loop template
+    # the moment the var is read. Compute the default into a distinct name.)
+    mender_artifacts_dir: "{{ manifest_dir }}/../../deploy/mender"
   tasks:
     - name: "Base dirs"
       ansible.builtin.file:
