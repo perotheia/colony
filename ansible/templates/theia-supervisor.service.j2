@@ -20,6 +20,10 @@ Wants=network-online.target
 Type=simple
 Environment=THEIA_ROOT_DIR=/opt/theia
 Environment=THEIA_MACHINE={{ machine }}
+# L4-C: the supervisor shifts each child node's --tipc instance by this index
+# (central=0, compute=1, …) so the same FC binary binds a per-board cluster
+# address. V-UCM reaches a specific board's UCM via connect_instance(idx).
+Environment=THEIA_MACHINE_INSTANCE={{ machine_instance | default('0') }}
 {% if tipc_scope | default('') == 'cluster' %}
 # L4-B multi-board: publish node services at TIPC CLUSTER scope so a remote
 # board's nodes are reachable over the eth TIPC bearer (the compute board's UCM

@@ -52,6 +52,11 @@
         # reachable across the eth TIPC bearer (multi-board: compute↔central).
         # Default node-scope for single-board rigs (registry omits tipc_scope).
         tipc_scope: "{{ _rig.tipc_scope | default('') }}"
+        # L4-C: per-machine TIPC instance index (central=0, compute=1, …). The
+        # supervisor shifts each child node's --tipc instance by this, so the same
+        # FC binary binds a distinct cluster address per board — V-UCM reaches a
+        # SPECIFIC board's UCM via connect_instance(idx). Default 0 (single-board).
+        machine_instance: "{{ _rig.machine_instance | default('0') }}"
 
 - name: "Theia orchestrate (Phase 2 — binaries + real config)"
   hosts: _orchestrate_targets
