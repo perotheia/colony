@@ -42,6 +42,13 @@
     theia_root: /opt/theia
     # the per-host machine.json on the CONTROLLER (read with the from_json filter)
     machine_json_path: "{{ manifest_dir }}/{{ machine }}/machine.json"
+    # The on-device Mender artifacts (theia-release update module + Mender→UCM
+    # state scripts) live in the framework's deploy/mender/ — they are NOT in the
+    # runtime .deb. Default to the framework checkout (manifest_dir is
+    # <ws>/dist/manifest, so deploy/mender is three dirs up + deploy/mender), so
+    # `mender install` finds the theia-release module on every board. Override with
+    # -e mender_artifacts_dir=<abs> if the controller's layout differs.
+    mender_artifacts_dir: "{{ mender_artifacts_dir | default(manifest_dir + '/../../deploy/mender', true) }}"
   tasks:
     - name: "Base dirs"
       ansible.builtin.file:

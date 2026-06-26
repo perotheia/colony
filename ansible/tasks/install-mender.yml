@@ -5,12 +5,34 @@
 #
 # Theia does NOT use Mender's rootfs A/B; the theia-release module lands releases
 # as /opt/theia/releases/<ver> + a `current` symlink switch (see deploy/mender/).
-- name: "Install mender-client (apt; distro package)"
+
+# Add the Mender apt repo FIRST — the distro package is too old to parse modern
+# Mender artifacts (Ubuntu focal ships mender-client 2.1.2 which fails on a
+# mender-artifact 3.11 .mender: "type_info provides values not yet supported").
+# The Mender repo offers 3.5.x, which UCM's standalone `mender install` needs.
+- name: "Trust the Mender apt signing key"
+  ansible.builtin.get_url:
+    url: https://downloads.mender.io/repos/debian/gpg
+    dest: /etc/apt/trusted.gpg.d/mender.asc
+    mode: "0644"
+  become: true
+  failed_when: false   # offline rig → fall back to the distro package below
+
+- name: "Add the Mender apt repo ({{ ansible_distribution | lower }}/{{ ansible_distribution_release }})"
+  ansible.builtin.apt_repository:
+    repo: "deb [arch={{ deb_arch | default('arm64') }}] https://downloads.mender.io/repos/debian {{ ansible_distribution | lower }}/{{ ansible_distribution_release }}/stable main"
+    filename: mender
+    state: present
+    update_cache: true
+  become: true
+  failed_when: false
+
+- name: "Install mender-client (Mender repo if reachable, else distro)"
   ansible.builtin.apt:
     name: mender-client
     state: present
     update_cache: true
-  failed_when: false          # some distros need the mender apt repo first; tolerate
+  failed_when: false          # the postinst service-enable can fail (standalone — no agent); tolerate
   register: _mender_apt
 
 - name: "Ensure the Mender state dirs"
