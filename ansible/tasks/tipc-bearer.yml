@@ -1,0 +1,67 @@
+# tipc-bearer.yml — enable the cross-board TIPC eth bearer (L4-B multi-board).
+#
+# THEIA_TIPC_SCOPE=cluster (the supervisor unit) makes a board PUBLISH its node
+# services at cluster scope — but a remote board only SEES them once a TIPC bearer
+# LINK exists between the two nodes. On a shared L2 segment, enabling the eth
+# bearer on each board auto-discovers the peer and brings the link up. Without
+# this, cluster-scoped lookups (compute's UCM → central's per; V-UCM reading a
+# remote marker) fail even though the scope is right.
+#
+# Gated on the registry's `tipc_bearer` (e.g. eth0); single-board rigs omit it.
+# Idempotent: `tipc bearer enable` is a no-op-ish re-run (already-enabled errors
+# are ignored).
+- name: "Ensure the tipc kernel module is loaded"
+  community.general.modprobe:
+    name: tipc
+    state: present
+  become: true
+  failed_when: false
+  when: tipc_bearer | default('') | length > 0
+
+- name: "Enable the TIPC eth bearer on {{ tipc_bearer }} (cross-board link)"
+  ansible.builtin.command:
+    cmd: "tipc bearer enable media eth device {{ tipc_bearer }}"
+  become: true
+  register: _tipc_bearer
+  changed_when: _tipc_bearer.rc == 0
+  # rc!=0 on a re-run when the bearer is ALREADY enabled: depending on the iproute2
+  # version the kernel returns "already enabled" OR a bare "Invalid argument"
+  # (EEXIST surfaced as EINVAL). Tolerate both — the link is up either way.
+  failed_when:
+    - _tipc_bearer.rc != 0
+    - "'already enabled' not in (_tipc_bearer.stderr | default(''))"
+    - "'Invalid argument' not in (_tipc_bearer.stderr | default(''))"
+  when: tipc_bearer | default('') | length > 0
+
+# Persist across reboot: a systemd-networkd-independent oneshot that re-enables
+# the bearer at boot (the runtime modprobes tipc but doesn't enable bearers).
+- name: "Install a boot-time tipc-bearer oneshot unit"
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/theia-tipc-bearer.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Theia TIPC eth bearer (L4-B cross-board link)
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStartPre=-/sbin/modprobe tipc
+      ExecStart=/usr/bin/tipc bearer enable media eth device {{ tipc_bearer }}
+      ExecStartPost=/bin/true
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+  register: _tipc_unit
+  when: tipc_bearer | default('') | length > 0
+
+- name: "Enable the tipc-bearer oneshot"
+  ansible.builtin.systemd:
+    name: theia-tipc-bearer
+    enabled: true
+    daemon_reload: true
+  become: true
+  when:
+    - tipc_bearer | default('') | length > 0
+    - _tipc_unit is defined and _tipc_unit.changed
