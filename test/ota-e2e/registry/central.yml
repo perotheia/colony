@@ -1,0 +1,26 @@
+# OTA e2e test registry — central (the gateway/coordinator board container).
+#
+# Container-targeted: ansible_host is the compose service name, user root, x86
+# (the DOCKER manifest attr), NO S3 (runtime_version unset → orchestrate installs
+# from the LOCAL bundle dist/manifest/central/central.deb the controller built).
+ansible_host: central
+ansible_user: root
+machine: central
+arch: x86_64
+deb_arch: amd64
+
+# No runtime_version → install-bundle path (local .deb), not install-runtime-s3.
+# Mender OTA is exercised SEPARATELY (the .mender flow), not the S3 runtime pull.
+
+# central IS the etcd singleton. Bind on the bridge IP; compute reaches it by the
+# `central` DNS alias on the ota network.
+etcd_listen_host: 0.0.0.0
+etcd_advertise_host: central
+
+mender_role: gateway
+boards: "central,compute"
+
+# Cross-board TIPC over the bridge. eth0 is the container's bridge NIC.
+tipc_scope: cluster
+tipc_bearer: eth0
+machine_instance: 0

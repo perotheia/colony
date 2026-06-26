@@ -1,0 +1,82 @@
+name: OTA e2e (isolated, full Mender server)
+
+# The HEAVY end-to-end test: provision → enroll → first-install → update →
+# rollback, run hermetically in containers with a real OSS Mender server. Reuses
+# the exact field flow (colony ansible + enroll-rig.sh + fleet.py + the
+# theia-release module). NOT per-PR — it bazel-builds the FC binaries and stands up
+# the ~10-container Mender server (~2-3GB pull). Nightly + manual.
+#
+# Repos it needs as siblings under the workspace: colony (this), theia,
+# ground-station — checked out side by side, then test/ota-e2e/run-e2e.sh drives it.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"      # 03:00 UTC nightly
+
+permissions:
+  contents: read
+
+jobs:
+  ota-e2e:
+    runs-on: ubuntu-latest    # needs docker + privileged containers + ~3GB
+    timeout-minutes: 60
+    steps:
+      - name: Check out colony
+        uses: actions/checkout@v4
+        with:
+          path: colony
+
+      - name: Check out theia (+ submodules)
+        uses: actions/checkout@v4
+        with:
+          repository: perotheia/theia
+          path: theia
+          submodules: recursive
+
+      - name: Check out ground-station
+        uses: actions/checkout@v4
+        with:
+          repository: perotheia/ground-station
+          path: ground-station
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install theia + artheia (editable) into a venv
+        working-directory: theia
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install -U pip
+          pip install -e artheia/ || true
+          pip install -e . || true
+
+      - name: Cache bazel
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel
+          key: bazel-ota-${{ runner.os }}-${{ hashFiles('theia/MODULE.bazel', 'theia/**/BUILD.bazel') }}
+          restore-keys: bazel-ota-${{ runner.os }}-
+
+      - name: Load the TIPC kernel module (cross-board bearer needs it host-side)
+        run: sudo modprobe tipc && lsmod | grep tipc
+
+      - name: Run the OTA e2e
+        env:
+          THEIA_DIR: ${{ github.workspace }}/theia
+          COLONY_DIR: ${{ github.workspace }}/colony
+          GROUND_STATION_DIR: ${{ github.workspace }}/ground-station
+          MENDER_SERVER_DIR: ${{ github.workspace }}/mender-server
+        run: |
+          chmod +x colony/test/ota-e2e/run-e2e.sh colony/test/ota-e2e/lib/*.sh colony/test/ota-e2e/build-artifacts.sh
+          colony/test/ota-e2e/run-e2e.sh
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ota-e2e-logs
+          path: colony/test/ota-e2e/logs/
+          if-no-files-found: ignore

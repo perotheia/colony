@@ -1,0 +1,16 @@
+# OTA e2e test registry — compute (the updatable domain board container).
+ansible_host: compute
+ansible_user: root
+machine: compute
+arch: x86_64
+deb_arch: amd64
+
+# No runtime_version → local bundle (dist/manifest/compute/compute.deb).
+
+mender_role: agent
+mender_proxy_host: central
+tipc_central_host: central
+
+tipc_scope: cluster
+tipc_bearer: eth0
+machine_instance: 1

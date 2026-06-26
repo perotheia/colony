@@ -1,0 +1,5 @@
+# Throwaway CI SSH keypair — generated at run time by run-e2e.sh (and the CI
+# workflow), never committed. A committed private key trips secret scanners and
+# is a footgun even when "just for tests".
+ci_ed25519
+ci_ed25519.pub

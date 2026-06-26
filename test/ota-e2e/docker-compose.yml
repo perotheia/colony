@@ -1,0 +1,87 @@
+# docker-compose.yml — isolated OTA end-to-end test (provision → enroll → install
+# → update → rollback), CI-runnable.
+#
+# Stands the whole field topology up in containers, on an ISOLATED bridge network
+# (not host networking — so it is reproducible in CI and never touches the host's
+# TIPC/etcd/ports):
+#
+#   mender-server   the OSS Mender server stack (brought up SEPARATELY by
+#                   run-e2e.sh via ground-station/mender/server/up.sh, then JOINED
+#                   to this network as `docker.mender.io`). Not defined here.
+#   controller      runs colony ansible (provision/orchestrate), enroll-rig.sh,
+#                   fleet.py. The "dev box / dalek controller".
+#   central         a Theia rig (systemd) — gets the 14-FC services slice.
+#   compute         a Theia rig (systemd) — gets the 2-FC (ucm+shwa) slice.
+#
+# The two boards share one bridge network so their supervisors' TIPC nodes form a
+# cross-board cluster over the bridge (the L4-B link), and both reach the Mender
+# server at the `docker.mender.io` vhost (aliased onto the server's traefik).
+#
+# Boards run systemd as PID 1 → need cgroup + a few mounts (the privileged-lite
+# recipe). CI runners allow this.
+#
+# Driven by run-e2e.sh — do not `up` this by hand expecting auto-provisioning;
+# the boards start EMPTY and wait for the controller to push Theia in.
+
+networks:
+  ota:
+    name: ota-e2e
+    driver: bridge
+
+services:
+  central:
+    build:
+      context: .
+      dockerfile: Dockerfile.board
+    image: theia-ota-board:latest
+    container_name: ota-central
+    hostname: central
+    privileged: true                     # systemd + TIPC bearer + setcap need it
+    cgroup: host
+    tmpfs:
+      - /run
+      - /run/lock
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      ota:
+        aliases: [central]
+    # docker.mender.io is added to /etc/hosts at run time by run-e2e.sh (→ the
+    # mender-server traefik container's IP on this network), mirroring enroll-rig.sh.
+
+  compute:
+    image: theia-ota-board:latest        # same image; role differs only by manifest
+    container_name: ota-compute
+    hostname: compute
+    privileged: true
+    cgroup: host
+    tmpfs:
+      - /run
+      - /run/lock
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      ota:
+        aliases: [compute]
+    depends_on: [central]
+
+  controller:
+    build:
+      context: .
+      dockerfile: Dockerfile.controller
+    image: theia-ota-controller:latest
+    container_name: ota-controller
+    hostname: controller
+    networks: [ota]
+    volumes:
+      # The three repos the controller drives, bind-mounted read-write (it writes
+      # dist/manifest + dist/roles into the theia checkout during the run). Paths
+      # default to the sibling layout (repo-root/{colony,theia,ground-station});
+      # CI overrides via ${COLONY_DIR}/${THEIA_DIR}/${GROUND_STATION_DIR}.
+      - ${COLONY_DIR:-../..}:/repo/colony:rw
+      - ${THEIA_DIR:-../../../theia}:/repo/theia:rw
+      - ${GROUND_STATION_DIR:-../../../ground-station}:/repo/ground-station:rw
+    working_dir: /repo
+    depends_on: [central, compute]
+    # Kept alive; run-e2e.sh execs the flow into it step by step.
+    command: ["sleep", "infinity"]
