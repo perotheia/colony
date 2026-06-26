@@ -4,7 +4,9 @@ name: OTA e2e (isolated, full Mender server)
 # rollback, run hermetically in containers with a real OSS Mender server. Reuses
 # the exact field flow (colony ansible + enroll-rig.sh + fleet.py + the
 # theia-release module). NOT per-PR — it bazel-builds the FC binaries and stands up
-# the ~10-container Mender server (~2-3GB pull). Nightly + manual.
+# the trimmed Mender server (~12 containers / ~1.4GB — mongo is the floor; the
+# unused gui/deviceconfig/deviceconnect/iot-manager + the 1.3GB qemu client are not
+# pulled). Nightly + manual.
 #
 # Repos it needs as siblings under the workspace: colony (this), theia,
 # ground-station — checked out side by side, then test/ota-e2e/run-e2e.sh drives it.

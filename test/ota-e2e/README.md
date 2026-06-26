@@ -50,7 +50,9 @@ From source, x86_64, **gzip** payloads (portable — boards may lack zstd):
 ## CI
 
 `.github/workflows/ota-e2e.yml` — `workflow_dispatch` + nightly (03:00 UTC). It is
-the heavy job (bazel build + ~10-container Mender server); not run per-PR. Logs are
+the heavy job (bazel build + the trimmed Mender server — ~12 containers / ~1.4GB,
+mongo being the floor; the unused gui/deviceconfig/deviceconnect/iot-manager and the
+1.3GB qemu client are not pulled); not run per-PR. Logs are
 uploaded as an artifact on failure.
 
 ## Why this exists
