@@ -48,6 +48,10 @@
         s3_endpoint: "{{ _rig.s3_endpoint | default('') }}"
         s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default('theia-runtime') }}"
         deb_arch: "{{ _rig.deb_arch | default('amd64') }}"
+        # L4-B: TIPC publication scope. 'cluster' makes a board's node services
+        # reachable across the eth TIPC bearer (multi-board: compute↔central).
+        # Default node-scope for single-board rigs (registry omits tipc_scope).
+        tipc_scope: "{{ _rig.tipc_scope | default('') }}"
 
 - name: "Theia orchestrate (Phase 2 — binaries + real config)"
   hosts: _orchestrate_targets

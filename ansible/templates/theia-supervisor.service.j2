@@ -20,6 +20,13 @@ Wants=network-online.target
 Type=simple
 Environment=THEIA_ROOT_DIR=/opt/theia
 Environment=THEIA_MACHINE={{ machine }}
+{% if tipc_scope | default('') == 'cluster' %}
+# L4-B multi-board: publish node services at TIPC CLUSTER scope so a remote
+# board's nodes are reachable over the eth TIPC bearer (the compute board's UCM
+# reaches central's per; V-UCM reads cross-board). Single-board rigs omit this
+# (default NODE scope keeps co-clustered rigs from seeing each other's services).
+Environment=THEIA_TIPC_SCOPE=cluster
+{% endif %}
 # theia-run.sh: require current, set THEIA_SUPERVISOR_MANIFEST + LD_LIBRARY_PATH=
 # $THEIA_ROOT_DIR/current/lib, then exec /opt/theia/bin/supervisor.
 ExecStart=/opt/theia/bin/theia-run
