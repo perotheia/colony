@@ -1,9 +1,15 @@
-# etcd.yml — install etcd ONLY on the etcd_machine, and only when etcd isn't
-# externally provided (docker compose etcd service / the host's etcd). ONE per
-# cluster. == provisioning.pp step 2.
+# etcd.yml — install + configure etcd ONLY on the etcd_machine, and only when
+# etcd isn't externally provided (docker compose etcd service / the host's etcd).
+# ONE per cluster (== provisioning.pp step 2).
 #
 # etcd_external is set per-run (-e etcd_external=true) or via a host var; default
 # unset → install on the etcd host.
+#
+# L4-B SHARED ETCD: the central board runs THE one etcd for the whole robot; the
+# compute boards' `per` point their etcd_endpoint at it (the registry's
+# etcd_endpoint config-override). So etcd must listen on a REACHABLE address, not
+# just localhost. `etcd_listen_host` (default 0.0.0.0) + `etcd_advertise_host`
+# (default the rig's ansible_host) drive the listen/advertise URLs.
 - name: "Etcd-server (cluster singleton)"
   ansible.builtin.apt:
     name: etcd-server
@@ -12,3 +18,33 @@
   when:
     - machine == etcd_machine
     - not (etcd_external | default(false) | bool)
+
+# /etc/default/etcd — the listen/advertise URLs + ETCD_UNSUPPORTED_ARCH for arm64
+# boards (focal's etcd 3.2 REFUSES to start on aarch64 without it). Templated so a
+# compute board reaches the central's etcd over eth.
+- name: "Configure etcd listen/advertise + arm64 flag (/etc/default/etcd)"
+  ansible.builtin.copy:
+    dest: /etc/default/etcd
+    mode: "0644"
+    content: |
+      # Managed by colony etcd.yml — L4-B shared-etcd config.
+      ETCD_LISTEN_CLIENT_URLS=http://{{ etcd_listen_host | default('0.0.0.0') }}:2379
+      ETCD_ADVERTISE_CLIENT_URLS=http://{{ etcd_advertise_host | default(ansible_host) }}:2379
+      {% if ansible_architecture == 'aarch64' %}
+      ETCD_UNSUPPORTED_ARCH=arm64
+      {% endif %}
+  register: _etcd_cfg
+  when:
+    - machine == etcd_machine
+    - not (etcd_external | default(false) | bool)
+
+- name: "Restart etcd on config change"
+  ansible.builtin.systemd:
+    name: etcd
+    state: restarted
+    enabled: true
+    daemon_reload: true
+  when:
+    - machine == etcd_machine
+    - not (etcd_external | default(false) | bool)
+    - _etcd_cfg is defined and _etcd_cfg.changed
