@@ -68,9 +68,19 @@ log "STEP 1 — fresh theia (checked out at $THEIA_DIR)"; ok "theia present"
 log "STEP 2 — build runtime + services (manifest.services.services_rig) → dist"
 ###############################################################################
 cd "$THEIA_DIR"
+# The services deb's Depends line is distro-specific (com/per link grpc++/protobuf
+# SHARED, and the soname package names differ): 22.04 → libgrpc++1, libprotobuf23;
+# 24.04 → libgrpc++1.51t64, libprotobuf32t64. The build emits the 22.04 names by
+# default; on a 24.04 host pass --define distro=ubuntu24 so the deb declares the
+# packages the (matching 24.04) board actually has. Else dpkg --install fails on
+# "libgrpc++1 not installed". Derive from the build host's VERSION_ID.
+DISTRO_DEF=()
+case "${VERSION_ID:-}" in
+  24.*) DISTRO_DEF=(--define=distro=ubuntu24) ;;
+esac
 # the services factory rig (ALL 16 FCs on central) builds the runtime+services debs.
 bazel build //packaging/theia:theia-runtime_deb //packaging/theia:theia-services_deb \
-  --platforms=//rules/config:host || die "runtime/services .deb build failed"
+  --platforms=//rules/config:host "${DISTRO_DEF[@]}" || die "runtime/services .deb build failed"
 # Pick the deb matching the CURRENT package _VERSION — NOT `find | head -1`, which
 # returns the oldest by alphabetical sort (an earlier-version stale deb still in
 # bazel-bin). A stale theia-services predating the 16-FC packaging commit ships only
