@@ -111,6 +111,15 @@ jobs:
           sudo chmod +x /usr/local/bin/bazel
           bazel version
 
+      - name: Install mender-artifact (STEP 7 packs the app .mender host-side)
+        run: |
+          curl -fsSL "https://downloads.mender.io/repos/debian/pool/main/m/mender-artifact/mender-artifact_3.11.2-1%2Bubuntu%2Bnoble_amd64.deb" \
+            -o /tmp/mender-artifact.deb \
+          || curl -fsSL "https://downloads.mender.io/repos/debian/pool/main/m/mender-artifact/mender-artifact_3.11.2-1%2Bubuntu%2Bjammy_amd64.deb" \
+            -o /tmp/mender-artifact.deb
+          sudo apt-get install -y /tmp/mender-artifact.deb
+          mender-artifact --version
+
       - name: Cache bazel (the cold-build long pole)
         uses: actions/cache@v4
         with:
