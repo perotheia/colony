@@ -1,5 +1,7 @@
 # colony — Theia device fleet & deployment
 
+[![OTA e2e](https://github.com/perotheia/colony/actions/workflows/ota-e2e.yml/badge.svg)](https://github.com/perotheia/colony/actions/workflows/ota-e2e.yml)
+
 The **deployment adapter** for a Theia fleet: agentless (Ansible SSH-push)
 provisioning + orchestration of rigs from a per-rig bundle the `theia` build emits.
 
