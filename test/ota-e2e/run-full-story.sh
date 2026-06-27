@@ -61,21 +61,25 @@ ok "built $(basename "$RT_DEB") + $(basename "$SV_DEB")"
 ###############################################################################
 log "STEP 3 — release runtime+services → S3 (MinIO theia-runtime/$RTVER)"
 ###############################################################################
-# bring MinIO + etcd up first (boards/controller come later)
-docker rm -f ota-minio ota-etcd 2>/dev/null || true
+# TIPC kernel module on the HOST (the boards' bearers need it; a privileged
+# container can't load it). The cross-board link itself is a real eth bearer over
+# the bridge (registries set tipc_bearer: eth0) — separate per-board namespaces.
+sudo modprobe tipc 2>/dev/null || modprobe tipc 2>/dev/null || die "modprobe tipc"
+# Bridge: bring MinIO up on the ota-e2e bridge; resolve it by IP for the host-side
+# push (the boards reach it by the `ota-minio` DNS name). etcd is NOT a host
+# container — central runs its own (own netns) at orchestrate time.
+docker rm -f ota-minio 2>/dev/null || true
 COLONY_DIR="$COLONY_DIR" THEIA_DIR="$THEIA_DIR" GROUND_STATION_DIR="$GROUND_STATION_DIR" \
   $COMPOSE up -d minio 2>&1 | tail -1
-for i in $(seq 1 20); do curl -sf "$S3/minio/health/ready" >/dev/null 2>&1 && break; sleep 1; done
-curl -sf "$S3/minio/health/ready" >/dev/null 2>&1 || die "MinIO not ready"
-sudo modprobe tipc 2>/dev/null || modprobe tipc 2>/dev/null || die "modprobe tipc"
-if ! curl -sf http://127.0.0.1:2379/health >/dev/null 2>&1; then
-  docker run -d --name ota-etcd --network host quay.io/coreos/etcd:v3.5.12 \
-    /usr/local/bin/etcd --listen-client-urls=http://127.0.0.1:2379 \
-    --advertise-client-urls=http://127.0.0.1:2379 >/dev/null
-  for i in $(seq 1 15); do curl -sf http://127.0.0.1:2379/health >/dev/null 2>&1 && break; sleep 1; done
-fi
+for i in $(seq 1 20); do
+  MINIO_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ota-minio 2>/dev/null)"
+  [ -n "$MINIO_IP" ] && curl -sf "http://$MINIO_IP:9000/minio/health/ready" >/dev/null 2>&1 && break
+  sleep 1
+done
+[ -n "${MINIO_IP:-}" ] || die "MinIO not ready on the bridge"
+S3="http://$MINIO_IP:9000"          # host-side push target (boards use ota-minio:9000)
 bash "$HERE/helpers/push-runtime-s3.sh" "$RTVER" "$S3" "$RT_DEB" "$SV_DEB" || die "runtime → S3 push failed"
-ok "runtime+services published to s3://theia-runtime/$RTVER/"
+ok "runtime+services published to s3://theia-runtime/$RTVER/ (bridge MinIO $MINIO_IP)"
 
 ###############################################################################
 log "STEP 4 — provision split_rig FROM S3 (central=singletons, compute=ucm+shwa)"
@@ -159,22 +163,29 @@ ok "user apps released (artifacts staged + S3)"
 ###############################################################################
 log "STEP 8 — orchestrate central+compute from demo/manifest (apps OTA)"
 ###############################################################################
-# Mender server up (the app OTA transport)
+# Mender server up (the app OTA transport), then JOIN its traefik to the ota-e2e
+# bridge so the boards (own netns) reach the API by IP — the dalek-safe model.
 MENDER_SERVER_DIR="$SERVER_DIR" bash "$GROUND_STATION_DIR/mender/server/up.sh" up
 MENDER_SERVER_DIR="$SERVER_DIR" bash "$GROUND_STATION_DIR/mender/server/up.sh" user "$MENDER_EMAIL" "$MENDER_PASS" 2>/dev/null||true
 cp "$SERVER_DIR/compose/certs/mender.crt" "$GROUND_STATION_DIR/.srv-ca.crt"
-for c in ota-central ota-compute; do
-  docker exec "$c" sh -c "grep -q docker.mender.io /etc/hosts||echo '127.0.0.1 docker.mender.io s3.docker.mender.io'>>/etc/hosts"
+TRAEFIK="$(docker ps --filter name=traefik --format '{{.Names}}' | head -1)"
+docker network connect ota-e2e "$TRAEFIK" 2>/dev/null || true
+TRAEFIK_IP="$(docker inspect -f '{{(index .NetworkSettings.Networks "ota-e2e").IPAddress}}' "$TRAEFIK" 2>/dev/null)"
+[ -n "$TRAEFIK_IP" ] || die "could not join/resolve traefik on the bridge"
+SRV="https://$TRAEFIK_IP"
+for c in ota-central ota-compute ota-controller; do
+  docker exec "$c" sh -c "grep -q docker.mender.io /etc/hosts||echo '$TRAEFIK_IP docker.mender.io s3.docker.mender.io'>>/etc/hosts" 2>/dev/null || true
 done
-# enroll
+ok "mender server joined the bridge ($TRAEFIK_IP)"
+# enroll (server reached by its bridge IP, not 127.0.0.1)
 for b in central compute; do
   ctl "RIG_EXEC=docker DEVICE_ID=$b SERVER_CA=/repo/ground-station/.srv-ca.crt \
-       bash /repo/ground-station/mender/server/enroll-rig.sh ota-$b 127.0.0.1 docker.mender.io $MENDER_EMAIL $MENDER_PASS" \
+       bash /repo/ground-station/mender/server/enroll-rig.sh ota-$b $TRAEFIK_IP docker.mender.io $MENDER_EMAIL $MENDER_PASS" \
     >/dev/null 2>&1 || die "enroll $b"
 done
 ok "boards enrolled"
 # deploy the demo APP release (1.0) over Mender — this is the user-apps composer.
-ctl "$HERE/helpers/group-and-deploy.sh 127.0.0.1 $MENDER_EMAIL $MENDER_PASS central-1.0 compute-1.0" \
+ctl "$HERE/helpers/group-and-deploy.sh $TRAEFIK_IP $MENDER_EMAIL $MENDER_PASS central-1.0 compute-1.0" \
   || die "app deploy failed"
 for b in central compute; do
   for i in $(seq 1 30); do

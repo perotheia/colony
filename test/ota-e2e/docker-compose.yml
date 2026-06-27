@@ -1,36 +1,34 @@
 # docker-compose.yml — OTA end-to-end test (provision → enroll → install → update
-# → rollback), CI-runnable, on HOST networking.
+# → rollback), CI-runnable, on a BRIDGE network (the real-board model).
 #
-# Host networking (not a bridge) so host-side tdb / rtdb / the artheia probe can
-# reach the stack's nodes over raw TIPC, and so the two boards share ONE host TIPC
-# namespace (the supervisor disambiguates them by machine_instance 0/1 — central 0,
-# compute 1 — exactly the deploy/docker-compose.yml model). etcd runs on central
-# only (a second one would collide on :2379).
+# BRIDGE networking (not host): each board container has its OWN network namespace
+# and therefore its OWN TIPC namespace — exactly like two physical boards (rpi4 +
+# jetson). The cross-board link is a real TIPC eth bearer
+# (`tipc bearer enable media eth device eth0`) over the bridge L2, brought up on
+# BOTH ends by colony's tipc-bearer.yml (the registries set tipc_bearer: eth0).
+# This is genuine TIPC *between* containers, and it exercises the eth-bearer
+# bringup the host-net model skips. It also runs cleanly on a shared host (e.g.
+# dalek) with no port/etcd collisions, and the GUI gRPC ports are mapped explicitly.
 #
-#   central     a Theia rig (systemd) — full services slice + demo apps + etcd, inst 0
+#   central     a Theia rig (systemd) — services slice + etcd + mender-gw, inst 0
 #   compute     a Theia rig (systemd) — ucm + shwa, inst 1
-#   controller  drives colony ansible + enroll-rig.sh + fleet.py
+#   controller  drives colony ansible (docker-conn) + enroll-rig.sh + fleet.py
+#   minio       the THEIA artifact S3 (theia-runtime/ + app plane)
 #
-# Ansible reaches the boards via the `community.docker.docker` connection (docker
-# exec), NOT ssh — on host networking two sshd's can't both bind :22, and exec
-# needs no keys/ports. The controller mounts the docker socket for this.
-#
-# Boards run systemd as PID 1 → privileged + the cgroup mount. The Mender server is
-# brought up separately by run-e2e.sh (ground-station up.sh) and is reachable on the
-# host net at https://localhost / docker.mender.io.
-#
-# Driven by run-e2e.sh — the boards start EMPTY and wait for the controller.
+# Boards run systemd as PID 1 → privileged + cgroup mount. NET_ADMIN lets the TIPC
+# bearer enable on eth0. The Mender server (ground-station up.sh) is joined to this
+# bridge as `docker.mender.io` by run-e2e.sh.
+
+networks:
+  ota:
+    name: ota-e2e
+    driver: bridge
 
 services:
-  # MinIO — the S3 store for the THEIA artifact planes (theia-runtime/ + the app
-  # plane). Distinct from the Mender server's own seaweedfs (Mender-internal). On
-  # host net it's reachable at http://127.0.0.1:9000, mirroring dalek's MinIO. The
-  # boards pull the runtime+services from here (install-runtime-s3); `theia release`
-  # + the app publisher push here.
   minio:
     image: minio/minio:latest
     container_name: ota-minio
-    network_mode: host
+    networks: [ota]
     command: server /data --address ":9000" --console-address ":9001"
     environment:
       - MINIO_ROOT_USER=theia
@@ -44,23 +42,31 @@ services:
     image: theia-ota-board:latest
     container_name: ota-central
     hostname: central
-    network_mode: host
     privileged: true
     cgroup: host
+    cap_add: [ NET_ADMIN ]               # tipc bearer enable on eth0
     tmpfs: [ /run, /run/lock ]
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      ota: { aliases: [central] }
+    ports:                               # com's GUI gRPC views (own netns → map them)
+      - "7700:7700"                      # SupervisorView/PerView/NmView/DiagView/Provisioning
+      - "7710:7710"                      # TraceStream
+      - "7711:7711"                      # LogStream
 
   compute:
     image: theia-ota-board:latest        # same image; role differs only by manifest
     container_name: ota-compute
     hostname: compute
-    network_mode: host
     privileged: true
     cgroup: host
+    cap_add: [ NET_ADMIN ]
     tmpfs: [ /run, /run/lock ]
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      ota: { aliases: [compute] }
     depends_on: [central]
 
   controller:
@@ -69,13 +75,9 @@ services:
       dockerfile: Dockerfile.controller
     image: theia-ota-controller:latest
     container_name: ota-controller
-    network_mode: host
+    networks: [ota]
     volumes:
-      # The docker socket — ansible reaches the boards via the docker connection
-      # (docker exec into ota-central / ota-compute), and fleet.py/up.sh manage the
-      # Mender server containers.
       - /var/run/docker.sock:/var/run/docker.sock
-      # The three repos the controller drives, bind-mounted read-write.
       - ${COLONY_DIR:-../..}:/repo/colony:rw
       - ${THEIA_DIR:-../../../theia}:/repo/theia:rw
       - ${GROUND_STATION_DIR:-../../../ground-station}:/repo/ground-station:rw

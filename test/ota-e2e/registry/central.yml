@@ -1,9 +1,9 @@
 # OTA e2e test registry — central (the gateway/coordinator board container).
 #
-# Reached via the docker connection (ansible exec into the container) — no SSH on
-# host networking. x86 (the DOCKER manifest attr). The runtime+services are pulled
-# FROM S3 (MinIO at 127.0.0.1:9000, runtime_version pinned) — the install-runtime-s3
-# path, NOT the local bundle. This is the fleet flow (Phase A).
+# BRIDGE network: own netns/TIPC namespace (the real rpi4 model). Reached via the
+# docker connection (ansible exec). The runtime+services are pulled FROM S3 (MinIO
+# at the `ota-minio` container, runtime_version pinned) — the install-runtime-s3
+# path (Phase A). Cross-board reaches compute over a real TIPC eth bearer.
 ansible_host: ota-central
 ansible_connection: community.docker.docker
 ansible_user: root
@@ -11,25 +11,24 @@ machine: central
 arch: x86_64
 deb_arch: amd64
 
-# S3 runtime plane (MinIO). runtime_version pins theia-runtime/<ver>/; the boards
-# pull + dpkg-install from here, then stage-release lays current → releases/<ver>.
+# S3 runtime plane (MinIO on the bridge — reached by container DNS name).
 runtime_version: e2e-local
-s3_endpoint: http://127.0.0.1:9000
+s3_endpoint: http://ota-minio:9000
 s3_runtime_bucket: theia-runtime
 
-# On HOST networking the runner's own etcd (127.0.0.1:2379) is visible to the
-# container, and a second etcd would collide on :2379/:2380. So treat etcd as
-# EXTERNALLY provided — colony's etcd.yml skips install/start and the FCs connect
-# to the host's etcd (the deploy/docker-compose.yml model). The CI runner brings up
-# an etcd before the test (run-e2e.sh starts one if absent).
-etcd_external: true
-etcd_advertise_host: 127.0.0.1
+# central is the etcd singleton. On a bridge it has its OWN netns, so it runs its
+# own etcd (no collision with the host/dalek etcd — unlike host networking). Bind
+# all-interfaces; compute reaches it by the `central` bridge alias.
+etcd_external: false
+etcd_listen_host: 0.0.0.0
+etcd_advertise_host: central
 
 mender_role: gateway
 boards: "central,compute"
 
-# Host networking shares ONE TIPC namespace; the supervisor offsets each node's
-# TIPC instance by machine_instance so central(0) and compute(1) don't collide.
-# No eth bearer is needed (same namespace) — leave tipc_bearer unset.
+# BRIDGE: central + compute are SEPARATE TIPC namespaces, so the cross-board link
+# is a real TIPC eth bearer over the bridge L2 — enabled on BOTH ends (compute too)
+# by tipc-bearer.yml. machine_instance still offsets node addresses per board.
 tipc_scope: cluster
+tipc_bearer: eth0
 machine_instance: 0

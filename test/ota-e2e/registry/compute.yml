@@ -1,6 +1,6 @@
 # OTA e2e test registry — compute (the updatable domain board container).
-# Reached via the docker connection (exec into ota-compute). Shares the host TIPC
-# namespace with central; machine_instance 1 keeps its node addresses distinct.
+# BRIDGE network: own netns/TIPC namespace (the real jetson model). Reached via the
+# docker connection. Cross-board to central over a real TIPC eth bearer.
 ansible_host: ota-compute
 ansible_connection: community.docker.docker
 ansible_user: root
@@ -8,16 +8,18 @@ machine: compute
 arch: x86_64
 deb_arch: amd64
 
-# S3 runtime plane (same MinIO as central). Phase A pulls compute's slice
-# (ucm + shwa) from theia-runtime/<ver>/.
+# S3 runtime plane (same MinIO as central, by bridge DNS name). Phase A pulls
+# compute's slice (ucm + shwa) from theia-runtime/<ver>/.
 runtime_version: e2e-local
-s3_endpoint: http://127.0.0.1:9000
+s3_endpoint: http://ota-minio:9000
 s3_runtime_bucket: theia-runtime
 
 mender_role: agent
-# central's etcd + services are on the same host net → localhost.
-mender_proxy_host: 127.0.0.1
-tipc_central_host: 127.0.0.1
+# central's etcd + services are reached by the `central` bridge alias.
+mender_proxy_host: central
+tipc_central_host: central
 
+# BRIDGE: cross-board to central via the TIPC eth bearer on eth0.
 tipc_scope: cluster
+tipc_bearer: eth0
 machine_instance: 1
