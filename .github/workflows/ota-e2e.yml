@@ -76,6 +76,12 @@ jobs:
           pip install -U pip
           pip install -e artheia/ || true
           pip install -e . || true
+          # nanopb_generator (the FC proto codegen the bazel build shells out to) is
+          # NOT a declared dep — install it onto the venv PATH so STEP 2's
+          # `theia release`/dist build resolves it.
+          pip install nanopb
+          nanopb_generator --help >/dev/null 2>&1 && echo "nanopb_generator OK" || \
+            command -v nanopb_generator
 
       - name: Install the C++ build deps (libnftables-dev etc — idsm needs them)
         # NOTE: awscli is NOT apt-installed — it was removed from Ubuntu 24.04's repos
@@ -88,6 +94,14 @@ jobs:
             libssl-dev libprotobuf-dev protobuf-compiler \
             libgrpc++-dev protobuf-compiler-grpc libabsl-dev libcpprest-dev \
             libnftables-dev
+          # Ubuntu 24.04's libnanopb-dev nests pb.h under /usr/include/nanopb/; the
+          # FC protos #include <pb.h> at the top level. Symlink them up (no-op on
+          # 22.04 where they're already top-level). Same as release-deb.yml.
+          if [ -f /usr/include/nanopb/pb.h ] && [ ! -e /usr/include/pb.h ]; then
+            for h in pb.h pb_common.h pb_decode.h pb_encode.h; do
+              sudo ln -sfn nanopb/"$h" /usr/include/"$h"
+            done
+          fi
           aws --version   # the pre-installed v2 (the S3 push uses it)
 
       - name: Install Bazelisk (ubuntu-latest has no bazel; pins via .bazelversion)
