@@ -55,3 +55,12 @@ theia's runtime `.deb` — colony places them, it does not contain them.
 The fleet **operations & monitoring** side (Mender GW + operator UX + enrollment)
 lives in the sibling **`ground-station`** repo. See theia
 `docs/tasks/BACKLOG/repo-separation.md`.
+
+## Testing
+
+`test/ota-e2e/` is the **nightly OTA integration gate** — it reproduces the real
+field workflow (build platform → S3 → provision `split_rig` from S3 → deliver user
+apps over Mender OTA) in containers on a bridge network (the real rpi4↔jetson TIPC
+model), green on a stock GitHub-hosted runner. Setup, the 9-step flow, the strategy
+motivation, and the container-TIPC model are documented in
+**[docs/ci/ota-e2e.md](docs/ci/ota-e2e.md)** (also published to the project wiki).
