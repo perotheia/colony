@@ -8,6 +8,12 @@ machine: compute
 arch: x86_64
 deb_arch: amd64
 
+# S3 runtime plane (same MinIO as central). Phase A pulls compute's slice
+# (ucm + shwa) from theia-runtime/<ver>/.
+runtime_version: e2e-local
+s3_endpoint: http://127.0.0.1:9000
+s3_runtime_bucket: theia-runtime
+
 mender_role: agent
 # central's etcd + services are on the same host net → localhost.
 mender_proxy_host: 127.0.0.1

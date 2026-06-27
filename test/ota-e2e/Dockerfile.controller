@@ -24,7 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip3 install --break-system-packages \
         "ansible-core>=2.16" \
         "textX>=4.0" "Jinja2>=3.1" "click>=8.1" "PyYAML>=6.0" "protobuf>=4.21" \
-    || pip3 install "ansible-core>=2.16" textX Jinja2 click PyYAML protobuf
+        "robotframework>=7.0" "pydantic>=2.0" \
+    || pip3 install "ansible-core>=2.16" textX Jinja2 click PyYAML protobuf robotframework pydantic
 
 # The MODERN docker CLI (docker-ce-cli) from Docker's official repo — debian's
 # `docker.io` ships an API-1.41 client that a Docker-29 host daemon (min API 1.44)

@@ -1,14 +1,21 @@
 # OTA e2e test registry — central (the gateway/coordinator board container).
 #
 # Reached via the docker connection (ansible exec into the container) — no SSH on
-# host networking. x86 (the DOCKER manifest attr), NO S3 (orchestrate installs from
-# the LOCAL bundle dist/manifest/central/central.deb the controller built).
+# host networking. x86 (the DOCKER manifest attr). The runtime+services are pulled
+# FROM S3 (MinIO at 127.0.0.1:9000, runtime_version pinned) — the install-runtime-s3
+# path, NOT the local bundle. This is the fleet flow (Phase A).
 ansible_host: ota-central
 ansible_connection: community.docker.docker
 ansible_user: root
 machine: central
 arch: x86_64
 deb_arch: amd64
+
+# S3 runtime plane (MinIO). runtime_version pins theia-runtime/<ver>/; the boards
+# pull + dpkg-install from here, then stage-release lays current → releases/<ver>.
+runtime_version: e2e-local
+s3_endpoint: http://127.0.0.1:9000
+s3_runtime_bucket: theia-runtime
 
 # On HOST networking the runner's own etcd (127.0.0.1:2379) is visible to the
 # container, and a second etcd would collide on :2379/:2380. So treat etcd as

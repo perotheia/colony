@@ -22,6 +22,21 @@
 # Driven by run-e2e.sh — the boards start EMPTY and wait for the controller.
 
 services:
+  # MinIO — the S3 store for the THEIA artifact planes (theia-runtime/ + the app
+  # plane). Distinct from the Mender server's own seaweedfs (Mender-internal). On
+  # host net it's reachable at http://127.0.0.1:9000, mirroring dalek's MinIO. The
+  # boards pull the runtime+services from here (install-runtime-s3); `theia release`
+  # + the app publisher push here.
+  minio:
+    image: minio/minio:latest
+    container_name: ota-minio
+    network_mode: host
+    command: server /data --address ":9000" --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=theia
+      - MINIO_ROOT_PASSWORD=theiaminio
+    tmpfs: [ /data ]
+
   central:
     build:
       context: .
