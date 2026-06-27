@@ -104,12 +104,20 @@
       when: runtime_version is not defined or runtime_version | length == 0
 
     # Lay the OTA-correct release-dir layout (releases/<ver>/bin + current symlink)
-    # the strict supervisor requires. The .debs install flat to bin/; this relocates
-    # the child binaries under current/. Only on the S3 path (runtime_version set) —
-    # the local-bundle path stages its own layout. Skipped if no version is pinned.
+    # the strict supervisor requires (theia-run.sh REFUSES to start without
+    # /opt/theia/current). Both install paths land the binaries FLAT in bin/, so
+    # both need this relocation — the local-bundle path used to skip it and the
+    # supervisor crash-looped "no release at /opt/theia/current". Run it always,
+    # versioning the release by runtime_version when pinned, else a 'local' baseline
+    # (an OTA deploy then lays releases/<artifact> + flips current on top).
     - name: "Include release-dir staging (current -> releases/<ver>)"
       ansible.builtin.include_tasks: tasks/stage-release.yml
-      when: runtime_version is defined and runtime_version | length > 0
+      vars:
+        # The release version stage-release names the dir after: the pinned
+        # runtime_version (S3 path) or a 'local' baseline (local-bundle path). A
+        # DISTINCT name — `runtime_version: {{ runtime_version }}` would self-
+        # reference and recurse. stage-release.yml reads `release_version`.
+        release_version: "{{ (runtime_version | default('')) or 'local' }}"
 
     - name: "Include setcap (the capability contract)"
       ansible.builtin.include_tasks: tasks/setcap.yml

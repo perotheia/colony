@@ -70,12 +70,20 @@ def _verb(playbook: str, verb: str, args: list[str]) -> int:
     tgt, rest = _target(args, verb)
     if not tgt:
         return 2
-    reg = WORKSPACE / "deploy" / "registry" / f"{tgt}.yml"
+    # Registry dir: $COLONY_REGISTRY overrides the default $THEIA_WORKSPACE/deploy/
+    # registry (mirrors $COLONY_ANSIBLE for playbooks). The playbooks already accept
+    # `-e registry_dir=…`; honor the same location for the existence pre-check + pass
+    # it through so the two never disagree. Lets a test/alt rig keep its registry
+    # outside the bundle workspace.
+    reg_dir = Path(os.environ.get("COLONY_REGISTRY")
+                   or (WORKSPACE / "deploy" / "registry"))
+    reg = reg_dir / f"{tgt}.yml"
     if not reg.is_file():
         print(f"colony {verb}: no registry entry {reg} — add it (ansible_host + "
               f"machine) to deploy this target.", file=sys.stderr)
         return 1
-    return _ansible(playbook, ["-e", f"target={tgt}", *rest])
+    return _ansible(playbook, ["-e", f"target={tgt}",
+                               "-e", f"registry_dir={reg_dir}", *rest])
 
 
 def main(argv: list[str]) -> int:

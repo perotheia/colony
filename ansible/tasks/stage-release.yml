@@ -14,12 +14,18 @@
 # current at it. Idempotent: re-running re-syncs the release dir + re-flips current.
 #
 # Vars:
-#   runtime_version  the <ver> for the release dir (the S3 plane key, e.g.
-#                    0.2.0-ubuntu24 — kept verbatim so `current` names the exact
-#                    provisioned build).
-- name: "Release dir for {{ runtime_version }}"
+#   release_version  the <ver> for the release dir. The orchestrate play passes the
+#                    pinned runtime_version (S3 path) or 'local' (local-bundle path).
+#                    A DISTINCT name from runtime_version so the caller can derive it
+#                    without a self-referential (recursive) template. Falls back to
+#                    runtime_version then 'local' for direct callers.
+- name: "Resolve the release version"
+  ansible.builtin.set_fact:
+    _relver: "{{ release_version | default(runtime_version | default('local', true), true) }}"
+
+- name: "Release dir for {{ _relver }}"
   ansible.builtin.file:
-    path: "{{ theia_root }}/releases/{{ runtime_version }}/{{ item }}"
+    path: "{{ theia_root }}/releases/{{ _relver }}/{{ item }}"
     state: directory
     mode: "0755"
   loop:
@@ -35,19 +41,19 @@
     excludes: "supervisor,theia-run"
   register: _children
 
-- name: "Relocate the child binaries into releases/{{ runtime_version }}/bin"
+- name: "Relocate the child binaries into releases/{{ _relver }}/bin"
   ansible.builtin.copy:
     src: "{{ item.path }}"
-    dest: "{{ theia_root }}/releases/{{ runtime_version }}/bin/{{ item.path | basename }}"
+    dest: "{{ theia_root }}/releases/{{ _relver }}/bin/{{ item.path | basename }}"
     mode: "0755"
     remote_src: true
   loop: "{{ _children.files }}"
   loop_control:
     label: "{{ item.path | basename }}"
 
-- name: "Point current -> releases/{{ runtime_version }} (the OTA release symlink)"
+- name: "Point current -> releases/{{ _relver }} (the OTA release symlink)"
   ansible.builtin.file:
-    src: "releases/{{ runtime_version }}"
+    src: "releases/{{ _relver }}"
     dest: "{{ theia_root }}/current"
     state: link
     force: true

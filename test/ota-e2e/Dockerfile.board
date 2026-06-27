@@ -14,26 +14,36 @@
 # NO sshd: on HOST networking two board containers can't both bind :22, and ansible
 # reaches them via the `community.docker.docker` connection (docker exec) instead —
 # the controller mounts the docker socket. Simpler, and no keys/ports to manage.
-FROM debian:bookworm
+# ubuntu:22.04 (Jammy) — MUST match the build host's distro: `theia dist` links the
+# FC binaries (per's grpc/protobuf/boost/absl closure, nm's nftables) against the
+# build host's system .so's, which are Jammy's (libprotobuf.so.23, boost 1.74,
+# grpc.so.10). A bookworm board has different .so versions → the FCs fail to start
+# (exit 127, "libabsl_synchronization.so.20210324: cannot open"). Same-distro is the
+# real-deploy contract; here the board image matches the builder.
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# systemd as PID 1 + the runtime prereqs.
+# systemd as PID 1 + runtime prereqs + the FC runtime-lib closure (the .so's the
+# dist .deb's binaries dynamically link: grpc/protobuf/boost/absl for per, nftables
+# for nm, etc). Without these the supervisor's children exit 127 on a missing lib.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv dbus \
         sudo ca-certificates curl gnupg \
         python3 python3-minimal \
         iproute2 libcap2-bin tar gzip zstd \
         procps net-tools \
+        libgrpc++1 libprotobuf23 \
+        libboost-system1.74.0 libboost-random1.74.0 \
+        libnftables1 libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Mender apt repo + the 4.x client (mender-update drives `mender install`; the
-# server-enrolled deployments API needs the 4.x update/auth split) — matching
-# colony's install-mender.yml.
+# Mender 4.x client from Mender's apt repo (ubuntu/jammy) — matching colony's
+# install-mender.yml; the server v4 deployments API needs the update/auth split.
 RUN install -d /etc/apt/keyrings \
     && curl -fsSL https://downloads.mender.io/repos/debian/gpg \
          -o /etc/apt/trusted.gpg.d/mender.asc \
-    && echo "deb [arch=amd64] https://downloads.mender.io/repos/debian debian/bookworm/stable main" \
+    && echo "deb [arch=amd64] https://downloads.mender.io/repos/debian ubuntu/jammy/stable main" \
          > /etc/apt/sources.list.d/mender.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends mender-update mender-auth \

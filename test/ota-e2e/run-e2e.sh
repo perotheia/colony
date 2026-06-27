@@ -40,10 +40,12 @@ trap cleanup EXIT
 ctl()  { docker exec ota-controller bash -lc "$*"; }
 bcur() { docker exec "ota-$1" readlink /opt/theia/current 2>/dev/null || echo NONE; }
 bfc()  { docker exec "ota-$1" sh -c 'ps -eo args 2>/dev/null | grep -c "/opt/theia/current/bin/[a-z]"' 2>/dev/null || echo 0; }
-# colony verb via the controller, pointed at the test registry + theia bundle
-CENV="THEIA_WORKSPACE=/repo/theia/demo COLONY_ANSIBLE=/repo/colony/ansible"
-REG="/repo/colony/test/ota-e2e/registry"; MAN="/repo/theia/demo/dist/manifest"
-colony() { ctl "$CENV /repo/colony/bin/colony $1 $2 -e registry_dir=$REG -e manifest_dir=$MAN ${3:-}"; }
+# colony verb via the controller, pointed at the test registry + theia bundle.
+# COLONY_REGISTRY makes bin/colony's pre-check + the playbooks use the test registry
+# (outside the demo bundle workspace); manifest_dir → the demo's dist/manifest.
+CENV="THEIA_WORKSPACE=/repo/theia/demo COLONY_ANSIBLE=/repo/colony/ansible COLONY_REGISTRY=/repo/colony/test/ota-e2e/registry"
+MAN="/repo/theia/demo/dist/manifest"
+colony() { ctl "$CENV /repo/colony/bin/colony $1 $2 -e manifest_dir=$MAN ${3:-}"; }
 
 ###############################################################################
 log "PHASE 0 — build (FCs + demo apps + manifests + role artifacts)"
@@ -71,12 +73,7 @@ ok "host etcd healthy"
 log "mender server up (clones+pulls on first run; trimmed ~1.4GB)"
 MENDER_SERVER_DIR="$SERVER_DIR" bash "$GROUND_STATION_DIR/mender/server/up.sh" up
 MENDER_SERVER_DIR="$SERVER_DIR" bash "$GROUND_STATION_DIR/mender/server/up.sh" user "$MENDER_EMAIL" "$MENDER_PASS" 2>/dev/null || true
-# host-net: the server's API gateway is on https://localhost; the boards reach it
-# there too (docker.mender.io → 127.0.0.1).
 SRV="https://127.0.0.1"
-for c in ota-central ota-compute; do
-  docker exec "$c" sh -c "grep -q docker.mender.io /etc/hosts || echo '127.0.0.1 docker.mender.io s3.docker.mender.io' >> /etc/hosts"
-done
 ok "mender server up ($SRV)"
 
 log "compose build + up (boards boot systemd; controller drives them)"
@@ -88,6 +85,13 @@ for b in central compute; do
     sleep 2; [ "$i" = 30 ] && die "docker-conn to $b never came up"
   done; ok "controller → $b ready"
 done
+
+# host-net: the server's API gateway is on https://localhost; the boards reach it
+# there too (docker.mender.io → 127.0.0.1). Wire it in AFTER the boards are up.
+for c in ota-central ota-compute; do
+  docker exec "$c" sh -c "grep -q docker.mender.io /etc/hosts || echo '127.0.0.1 docker.mender.io s3.docker.mender.io' >> /etc/hosts"
+done
+ok "docker.mender.io wired into both boards"
 
 ###############################################################################
 log "PHASE 2 — provision + orchestrate both boards (colony ansible)"
