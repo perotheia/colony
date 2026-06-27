@@ -1,15 +1,19 @@
-name: OTA e2e (isolated, full Mender server)
+name: OTA e2e (bridge, full Mender server)
 
-# The HEAVY end-to-end test: provision → enroll → first-install → update →
-# rollback, run hermetically in containers with a real OSS Mender server. Reuses
-# the exact field flow (colony ansible + enroll-rig.sh + fleet.py + the
-# theia-release module). NOT per-PR — it bazel-builds the FC binaries and stands up
-# the trimmed Mender server (~12 containers / ~1.4GB — mongo is the floor; the
-# unused gui/deviceconfig/deviceconnect/iot-manager + the 1.3GB qemu client are not
-# pulled). Nightly + manual.
+# The FULL 9-step nightly story, no skips, on a BRIDGE network (real-board model:
+# separate per-board TIPC namespaces linked by an eth bearer):
+#   build runtime+services (services_rig) → S3 (MinIO) → provision split_rig FROM S3
+#   → theia init demo → build demo → release apps → orchestrate apps (Mender OTA)
+#   → RF audit/consistency over the composer's TIPC.
 #
-# Repos it needs as siblings under the workspace: colony (this), theia,
-# ground-station — checked out side by side, then test/ota-e2e/run-e2e.sh drives it.
+# Repos checked out as siblings under the workspace: colony (this), theia,
+# ground-station — then test/ota-e2e/run-full-story.sh drives it.
+#
+# Both repos are PUBLIC → unlimited GitHub-hosted Actions minutes, so the cold bazel
+# build's wall-clock is free; the real limits are the runner DISK (14GB → we free
+# the pre-loaded toolchains) and the 60-min job timeout. The one fragile dependency
+# is the tipc kernel module (linux-modules-extra on the runner image) — preflighted
+# LOUD so a runner-image regression fails clearly instead of silently.
 
 on:
   workflow_dispatch:
@@ -21,13 +25,32 @@ permissions:
 
 jobs:
   ota-e2e:
-    runs-on: ubuntu-latest    # needs docker + privileged containers + ~3GB
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
+      - name: Free up runner disk (drop pre-loaded toolchains)
+        # bazel + the Mender images + board/minio/controller images need headroom
+        # on the 14GB runner disk. Reclaim the ~25-30GB of android/dotnet/ghc/etc.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          df -h /
+
+      - name: Preflight — TIPC kernel module (HARD requirement)
+        # The boards' cross-board link is a TIPC eth bearer; the module MUST load on
+        # the host (a privileged container can't load it). Fail LOUD here if the
+        # runner image dropped linux-modules-extra/tipc — don't let it fail opaquely
+        # mid-run. (If this ever breaks, move the nightly to a self-hosted runner.)
+        run: |
+          sudo modprobe tipc || {
+            echo "::error::tipc kernel module not available on this runner image — \
+                  the OTA e2e needs it for the cross-board bearer. Consider a \
+                  self-hosted runner (e.g. dalek)."; exit 1; }
+          lsmod | grep tipc
+
       - name: Check out colony
         uses: actions/checkout@v4
-        with:
-          path: colony
+        with: { path: colony }
 
       - name: Check out theia (+ submodules)
         uses: actions/checkout@v4
@@ -43,8 +66,7 @@ jobs:
           path: ground-station
 
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
+        with: { python-version: "3.x" }
 
       - name: Install theia + artheia (editable) into a venv
         working-directory: theia
@@ -55,25 +77,39 @@ jobs:
           pip install -e artheia/ || true
           pip install -e . || true
 
-      - name: Cache bazel
+      - name: Install the C++ build deps (libnftables-dev etc — idsm needs them)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config dpkg-dev \
+            libnanopb-dev libboost-system-dev libboost-thread-dev libboost-random-dev \
+            libssl-dev libprotobuf-dev protobuf-compiler \
+            libgrpc++-dev protobuf-compiler-grpc libabsl-dev libcpprest-dev \
+            libnftables-dev awscli
+
+      - name: Install Bazelisk (ubuntu-latest has no bazel; pins via .bazelversion)
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/bazel \
+            https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          sudo chmod +x /usr/local/bin/bazel
+          bazel version
+
+      - name: Cache bazel (the cold-build long pole)
         uses: actions/cache@v4
         with:
           path: ~/.cache/bazel
           key: bazel-ota-${{ runner.os }}-${{ hashFiles('theia/MODULE.bazel', 'theia/**/BUILD.bazel') }}
           restore-keys: bazel-ota-${{ runner.os }}-
 
-      - name: Load the TIPC kernel module (cross-board bearer needs it host-side)
-        run: sudo modprobe tipc && lsmod | grep tipc
-
-      - name: Run the OTA e2e
+      - name: Run the full 9-step OTA story (bridge)
         env:
           THEIA_DIR: ${{ github.workspace }}/theia
           COLONY_DIR: ${{ github.workspace }}/colony
           GROUND_STATION_DIR: ${{ github.workspace }}/ground-station
           MENDER_SERVER_DIR: ${{ github.workspace }}/mender-server
         run: |
-          chmod +x colony/test/ota-e2e/run-e2e.sh colony/test/ota-e2e/lib/*.sh colony/test/ota-e2e/build-artifacts.sh
-          colony/test/ota-e2e/run-e2e.sh
+          chmod +x colony/test/ota-e2e/run-full-story.sh colony/test/ota-e2e/helpers/*.sh
+          colony/test/ota-e2e/run-full-story.sh
 
       - name: Upload logs on failure
         if: failure()

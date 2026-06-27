@@ -25,7 +25,16 @@ COLONY_DIR="${COLONY_DIR:-$(cd "$HERE/../.." && pwd)}"
 GROUND_STATION_DIR="${GROUND_STATION_DIR:-$(cd "$HERE/../../../ground-station" && pwd)}"
 DEMO_DIR="$THEIA_DIR/demo"
 export THEIA_DIR COLONY_DIR GROUND_STATION_DIR
-export PATH="$THEIA_DIR/.venv/bin:$PATH"
+# Source the framework env so `theia`/`tdb`/`artheia` are on PATH and the .venv/bin
+# CLI symlinks exist (a fresh CI checkout's venv has the editable installs but not
+# the env.sh-created `theia` wrapper). Fall back to a bare PATH prepend if env.sh
+# isn't sourceable (e.g. a minimal image).
+if [ -f "$THEIA_DIR/env.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$THEIA_DIR/env.sh" >/dev/null 2>&1 || export PATH="$THEIA_DIR/.venv/bin:$PATH"
+else
+  export PATH="$THEIA_DIR/.venv/bin:$PATH"
+fi
 COMPOSE="docker compose -f $HERE/docker-compose.yml"
 SERVER_DIR="${MENDER_SERVER_DIR:-$HOME/mender-server}"
 MENDER_EMAIL="admin@docker.mender.io"; MENDER_PASS="password123"
