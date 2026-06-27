@@ -16,28 +16,28 @@ FLEET="/repo/ground-station/fleet/fleet.py"
 
 jwt() { curl -sk -u "$EMAIL:$PASS" -X POST "$API/v1/useradm/auth/login"; }
 J="$(jwt)"; [ -n "$J" ] || { echo "login failed" >&2; exit 1; }
-PAT="$(curl -sk -H "Authorization: Bearer $J" -H 'Content-Type: application/json' \
-  -X POST "$API/v1/useradm/settings/tokens" -d '{"name":"e2e"}')"
-export MENDER_TOKEN="$PAT"
+# Use the login JWT directly as the bearer token for fleet.py — minting a named PAT
+# every run collides on the name (Mender rejects the duplicate → an invalid token,
+# 401 on the next call). The JWT is a valid management bearer for this session.
+export MENDER_TOKEN="$J"
 
-# group each device by the role its mac maps to. We discover macs from the boards'
-# eth0 and match against the inventory device list.
+# group each device by its `device` IDENTITY (== the board name, set at enroll via
+# DEVICE_ID). On host networking the boards share a MAC, so identity — not MAC — is
+# what distinguishes them; the identity IS the board name, so the mapping is direct.
 declare -A WANT
 [ -n "$ART_CENTRAL" ] && WANT[central]="$ART_CENTRAL"
 [ -n "$ART_COMPUTE" ] && WANT[compute]="$ART_COMPUTE"
 
-# map board → mac (ask the board over ssh) → device id (inventory) → set group
-devs_json="$(curl -sk -H "Authorization: Bearer $J" "$API/v1/inventory/devices?per_page=100")"
+devs_json="$(curl -sk -H "Authorization: Bearer $J" "$API/v2/devauth/devices?per_page=100")"
 for board in "${!WANT[@]}"; do
-  mac="$(ssh -o StrictHostKeyChecking=no root@"$board" 'cat /sys/class/net/eth0/address' 2>/dev/null)"
   dev_id="$(printf '%s' "$devs_json" | python3 -c "
 import sys,json
-mac='$mac'
+board='$board'
 for d in json.load(sys.stdin):
-    if any(a.get('name')=='mac' and a.get('value')==mac for a in d.get('attributes',[])):
+    if d.get('identity_data',{}).get('device')==board:
         print(d['id']); break
 ")"
-  [ -n "$dev_id" ] || { echo "no device for $board (mac $mac) in inventory yet" >&2; exit 1; }
+  [ -n "$dev_id" ] || { echo "no device with identity device=$board in devauth yet" >&2; exit 1; }
   curl -sk -o /dev/null -w "  group $board ($dev_id): %{http_code}\n" \
     -H "Authorization: Bearer $J" -H 'Content-Type: application/json' \
     -X PUT "$API/v1/inventory/devices/$dev_id/group" -d "{\"group\":\"$board\"}"

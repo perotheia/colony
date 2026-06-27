@@ -9,13 +9,16 @@ THEIA_DIR="${THEIA_DIR:-$(cd "$(dirname "$0")/../../../../theia" && pwd)}"
 MA="$(command -v mender-artifact-wrap || command -v mender-artifact)"
 [ -n "$MA" ] || { echo "mender-artifact not found" >&2; exit 1; }
 
-OUT="${DIST_ROOT:-$THEIA_DIR/demo/dist}/roles/${ROLE}-${VER}-broken.mender"
+# The artifact NAME must match the file stem (${ROLE}-${VER}-broken) — group-and-
+# deploy deploys by that name, and a mismatch is a 422 "No artifact".
+NAME="${ROLE}-${VER}-broken"
+OUT="${DIST_ROOT:-$THEIA_DIR/demo/dist}/roles/${NAME}.mender"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-echo "${ROLE}-${VER}" > "$WORK/version.txt"
+echo "${NAME}" > "$WORK/version.txt"
 echo "THIS IS NOT A VALID TARBALL — deliberate fail for the rollback test" \
   > "$WORK/release.tar.gz"
 "$MA" write module-image \
-  --type theia-release --artifact-name "${ROLE}-${VER}" --device-type theia-rig \
+  --type theia-release --artifact-name "${NAME}" --device-type theia-rig \
   --file "$WORK/release.tar.gz" --file "$WORK/version.txt" \
   --output-path "$OUT" >/dev/null
 echo "[broken] wrote $OUT"
