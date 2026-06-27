@@ -19,7 +19,10 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 # extract the deb's /opt/theia tree → the release dir
 dpkg-deb -x "$DEB" "$WORK/root"
 [ -d "$WORK/root/opt/theia" ] || { echo "deb has no /opt/theia tree" >&2; exit 1; }
-# pack release.tar.gz from /opt/theia (bin/ lib/ …) + the version marker
+# pack release.tar.gz from /opt/theia (bin/ lib/ …) + the version marker. NOTE:
+# executor.json is NOT in the release — the supervisor reads /opt/theia/config/
+# executor.json (a FIXED path, not under current/), so the user's supervision tree
+# is pushed by the colony orchestrate config step (step 8), not carried in the OTA.
 echo "${MACHINE}-${VER}" > "$WORK/version.txt"
 tar -C "$WORK/root/opt/theia" -czf "$WORK/release.tar.gz" .
 "$MA" write module-image \

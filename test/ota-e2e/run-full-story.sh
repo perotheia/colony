@@ -11,11 +11,15 @@
 #   8. colony orchestrate central+compute from demo/manifest
 #   9. RF audit/consistency over the composer's TIPC
 #
-# Host networking: boards share the host TIPC namespace (machine_instance 0/1);
+# BRIDGE networking: each board own netns/TIPC ns, linked by a real eth bearer.
 # MinIO at 127.0.0.1:9000; Mender server at https://127.0.0.1; ansible reaches the
 # boards via the docker connection. Driven entirely locally.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
+# CHERE = this dir's path INSIDE the controller container (repos mount at /repo).
+# Use it for any helper invoked via ctl() (docker exec into the controller); $HERE
+# is the HOST path and does not exist there.
+CHERE="/repo/colony/test/ota-e2e"
 THEIA_DIR="${THEIA_DIR:-$(cd "$HERE/../../../theia" && pwd)}"
 COLONY_DIR="${COLONY_DIR:-$(cd "$HERE/../.." && pwd)}"
 GROUND_STATION_DIR="${GROUND_STATION_DIR:-$(cd "$HERE/../../../ground-station" && pwd)}"
@@ -53,10 +57,19 @@ cd "$THEIA_DIR"
 # the services factory rig (ALL 16 FCs on central) builds the runtime+services debs.
 bazel build //packaging/theia:theia-runtime_deb //packaging/theia:theia-services_deb \
   --platforms=//rules/config:host || die "runtime/services .deb build failed"
-RT_DEB="$(find bazel-bin/packaging/theia -name 'theia-runtime_*_amd64.deb'|head -1)"
-SV_DEB="$(find bazel-bin/packaging/theia -name 'theia-services_*_amd64.deb'|head -1)"
-[ -f "$RT_DEB" ] && [ -f "$SV_DEB" ] || die "runtime/services debs not found"
-ok "built $(basename "$RT_DEB") + $(basename "$SV_DEB")"
+# Pick the deb matching the CURRENT package _VERSION — NOT `find | head -1`, which
+# returns the oldest by alphabetical sort (an earlier-version stale deb still in
+# bazel-bin). A stale theia-services predating the 16-FC packaging commit ships only
+# 6 FCs → central crashes on missing binaries. Read _VERSION from the BUILD file.
+VER="$(grep -oE '_VERSION = "[^"]+"' packaging/theia/BUILD.bazel | head -1 | grep -oE '[0-9][0-9.]*')"
+[ -n "$VER" ] || die "could not read _VERSION from packaging/theia/BUILD.bazel"
+RT_DEB="bazel-bin/packaging/theia/theia-runtime_${VER}_amd64.deb"
+SV_DEB="bazel-bin/packaging/theia/theia-services_${VER}_amd64.deb"
+[ -f "$RT_DEB" ] && [ -f "$SV_DEB" ] || die "runtime/services v$VER debs not found"
+# Guard the known failure mode: the services deb must carry the FULL set (>10 FCs).
+nfc="$(dpkg -c "$SV_DEB" 2>/dev/null | grep -cE 'opt/theia/bin/[a-z]')"
+[ "${nfc:-0}" -ge 10 ] || die "theia-services v$VER has only $nfc FCs (stale deb?) — expected the full set"
+ok "built $(basename "$RT_DEB") + $(basename "$SV_DEB") ($nfc FCs)"
 
 ###############################################################################
 log "STEP 3 — release runtime+services → S3 (MinIO theia-runtime/$RTVER)"
@@ -185,18 +198,29 @@ for b in central compute; do
 done
 ok "boards enrolled"
 # deploy the demo APP release (1.0) over Mender — this is the user-apps composer.
-ctl "$HERE/helpers/group-and-deploy.sh $TRAEFIK_IP $MENDER_EMAIL $MENDER_PASS central-1.0 compute-1.0" \
+ctl "$CHERE/helpers/group-and-deploy.sh $TRAEFIK_IP $MENDER_EMAIL $MENDER_PASS central-1.0 compute-1.0" \
   || die "app deploy failed"
 for b in central compute; do
   for i in $(seq 1 30); do
     cur="$(docker exec ota-$b readlink /opt/theia/current 2>/dev/null||echo NONE)"
-    case "$cur" in *"$b-1.0"*) ok "$b composer → $cur"; break;; esac
+    case "$cur" in *"$b-1.0"*) ok "$b OTA delivered $cur"; break;; esac
     docker exec "ota-$b" sh -c 'kill -USR1 $(pgrep -x mender-update) 2>/dev/null'||true; sleep 4
-    [ "$i" = 30 ] && die "$b never flipped to the app composer ($cur)"
+    [ "$i" = 30 ] && die "$b never flipped to the app release ($cur)"
   done
 done
-sleep 6
-ok "orchestrated: central=$(bfc central) FCs [$(fcs central)] compute=$(bfc compute) FCs [$(fcs compute)]"
+# The OTA delivered the demo-app BINARIES (current → <m>-1.0) but the supervisor
+# reads /opt/theia/config/executor.json (a FIXED path, not in the release). Push the
+# DEMO supervision tree there — this is "orchestrate from demo/manifest" (the config
+# half): the user's executor.json defines which apps run (compute: p1-p4; central:
+# the services). Then the supervisor runs the OTA binaries under the demo tree.
+log "push the demo supervision tree (executor.json) — orchestrate config half"
+for b in central compute; do
+  docker cp "$DEMO_DIR/dist/manifest/$b/executor.json" "ota-$b:/opt/theia/config/executor.json"
+  docker exec "ota-$b" sh -c 'systemctl restart theia-supervisor' 2>/dev/null || true
+done
+sleep 12
+[ "$(bfc compute)" -ge 4 ] || die "compute not running the demo apps ($(bfc compute) FCs: $(fcs compute))"
+ok "composer: central=$(bfc central) FCs [$(fcs central)] compute=$(bfc compute) FCs [$(fcs compute)]"
 
 ###############################################################################
 log "STEP 9 — RF audit/consistency over the composer's TIPC"
