@@ -58,21 +58,26 @@ for m in central compute; do
   fi
 done
 
-# ── 3. the role .mender artifacts (first-install 0.2.1, update 0.2.2) ──
+# ── 3. the role .mender artifacts, packed FROM the dist .deb's /opt/theia tree ──
+# NOT `theia release-role` — that builds //packaging/theia, a framework target the
+# demo (consuming) workspace doesn't have. The per-machine dist .deb already carries
+# the right tree (central=services incl nm, compute=demo apps p1-p4+shwa), so we pack
+# the .mender straight from it — the demo apps land in the OTA payload.
 for ver in 0.2.1 0.2.2; do
   for role in central compute; do
-    log "pack $role-$ver.mender (theia-release, gzip)"
-    theia release-role --role "$role" --arch "$ARCH" --version "$ver" --mender-only \
-      || { echo "[build] release-role $role-$ver failed" >&2; exit 1; }
+    log "pack $role-$ver.mender (from $role.deb)"
+    DIST_ROOT="$DEMO_DIR/dist" "$HERE/helpers/deb-to-mender.sh" \
+      "$role" "$ver" "$DEMO_DIR/dist/manifest/$role/$role.deb" \
+      || { echo "[build] deb-to-mender $role-$ver failed" >&2; exit 1; }
   done
 done
-# make 0.2.2 differ from 0.2.1 (a real update)
-"$HERE/helpers/stamp-version.sh" central 0.2.2
-"$HERE/helpers/stamp-version.sh" compute 0.2.2
+# make 0.2.2 differ from 0.2.1 (a real update — a marker file in the tree)
+DIST_ROOT="$DEMO_DIR/dist" "$HERE/helpers/stamp-version.sh" central 0.2.2
+DIST_ROOT="$DEMO_DIR/dist" "$HERE/helpers/stamp-version.sh" compute 0.2.2
 
 # ── 4. the deliberately-broken artifact (rollback test) ──
 log "pack central-0.2.3-broken.mender"
-"$HERE/helpers/build-broken.sh" central 0.2.3
+DIST_ROOT="$DEMO_DIR/dist" "$HERE/helpers/build-broken.sh" central 0.2.3
 
 log "done — artifacts under $DEMO_DIR/dist/{manifest,roles}/"
 ls -la "$DEMO_DIR"/dist/roles/*.mender
