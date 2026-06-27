@@ -14,36 +14,41 @@
 # NO sshd: on HOST networking two board containers can't both bind :22, and ansible
 # reaches them via the `community.docker.docker` connection (docker exec) instead —
 # the controller mounts the docker socket. Simpler, and no keys/ports to manage.
-# ubuntu:22.04 (Jammy) — MUST match the build host's distro: `theia dist` links the
-# FC binaries (per's grpc/protobuf/boost/absl closure, nm's nftables) against the
-# build host's system .so's, which are Jammy's (libprotobuf.so.23, boost 1.74,
-# grpc.so.10). A bookworm board has different .so versions → the FCs fail to start
-# (exit 127, "libabsl_synchronization.so.20210324: cannot open"). Same-distro is the
-# real-deploy contract; here the board image matches the builder.
-FROM ubuntu:22.04
+# The base MUST MATCH THE BUILD HOST's distro: `theia dist` links the FC binaries
+# (per's grpc/protobuf/boost/absl closure, nm's nftables) against the build host's
+# system .so's. A mismatched board has different .so versions → the FCs exit 127
+# ("libprotobuf.so.NN: cannot open"). Same-distro is the real-deploy contract.
+#   BASE=ubuntu:22.04  ← build host is 22.04 (local dev box / jammy)
+#   BASE=ubuntu:24.04  ← build host is 24.04 (GitHub ubuntu-latest / noble)
+# run-full-story.sh detects the host and passes --build-arg BASE accordingly.
+ARG BASE=ubuntu:22.04
+FROM ${BASE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# systemd as PID 1 + runtime prereqs + the FC runtime-lib closure (the .so's the
-# dist .deb's binaries dynamically link: grpc/protobuf/boost/absl for per, nftables
-# for nm, etc). Without these the supervisor's children exit 127 on a missing lib.
+# systemd as PID 1 + runtime prereqs + the FC runtime-lib closure. Use the *-dev /
+# unversioned package names so apt resolves the distro's CURRENT soname (libprotobuf
+# .so.23 on 22.04, .so.32 on 24.04) — the package PROVIDES the runtime .so the
+# binaries need, no hardcoded version-in-name (which differs per distro).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv dbus \
         sudo ca-certificates curl gnupg \
         python3 python3-minimal \
         iproute2 libcap2-bin tar gzip zstd \
         procps net-tools \
-        libgrpc++1 libprotobuf23 \
-        libboost-system1.74.0 libboost-random1.74.0 \
-        libnftables1 libssl3 \
+        libgrpc++-dev libprotobuf-dev \
+        libboost-system-dev libboost-random-dev \
+        libnftables-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Mender 4.x client from Mender's apt repo (ubuntu/jammy) — matching colony's
-# install-mender.yml; the server v4 deployments API needs the update/auth split.
+# Mender 4.x client from Mender's apt repo — DISTRO/CODENAME derived from the base
+# (ubuntu/jammy on 22.04, ubuntu/noble on 24.04), matching colony's install-mender.yml.
+# The server v4 deployments API needs the update/auth split.
 RUN install -d /etc/apt/keyrings \
     && curl -fsSL https://downloads.mender.io/repos/debian/gpg \
          -o /etc/apt/trusted.gpg.d/mender.asc \
-    && echo "deb [arch=amd64] https://downloads.mender.io/repos/debian ubuntu/jammy/stable main" \
+    && . /etc/os-release \
+    && echo "deb [arch=amd64] https://downloads.mender.io/repos/debian ${ID}/${VERSION_CODENAME}/stable main" \
          > /etc/apt/sources.list.d/mender.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends mender-update mender-auth \

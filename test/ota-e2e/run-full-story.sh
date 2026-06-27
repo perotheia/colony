@@ -40,6 +40,11 @@ SERVER_DIR="${MENDER_SERVER_DIR:-$HOME/mender-server}"
 MENDER_EMAIL="admin@docker.mender.io"; MENDER_PASS="password123"
 S3="http://127.0.0.1:9000"; export MINIO_USER=theia MINIO_PASSWORD=theiaminio
 RTVER="e2e-local"                 # the runtime_version the registries pin
+# Board image base MUST match THIS (build) host's distro — `theia dist` links the
+# FCs against the host's system .so's, so the board needs the same soname versions.
+# ubuntu:<codename> from the host os-release (22.04 jammy local / 24.04 noble on CI).
+if [ -r /etc/os-release ]; then . /etc/os-release; fi
+export BOARD_BASE="${ID:-ubuntu}:${VERSION_ID:-22.04}"
 KEEP=0; for a in "$@"; do [ "$a" = "--keep" ] && KEEP=1; done
 
 log() { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }

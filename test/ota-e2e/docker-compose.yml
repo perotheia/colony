@@ -39,6 +39,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.board
+      args:
+        # Board base MUST match the build host's distro (ABI). run-full-story.sh
+        # sets BOARD_BASE from the host's os-release; default 22.04 for local dev.
+        BASE: ${BOARD_BASE:-ubuntu:22.04}
     image: theia-ota-board:latest
     container_name: ota-central
     hostname: central
