@@ -2,9 +2,11 @@
 # seeded) + the per-FC static config profiles. == orchestration.pp steps 3 + 3b.
 #
 # `theia manifest` already extracted execution.json.supervisor_tree into a ready
-# executor.json per host AND emitted <machine>/config/<fc>.json (gen-params default
-# deep-merged with deploy/config/<machine>/<fc>.json). We just COPY them. The config
-# dir is what lands the tsync GM-on-central / slave-on-compute split (etc).
+# executor.json per host AND emitted <machine>/config/<fc>.json (the gen-params
+# MACHINE-GENERIC default — NO override baked in). We just COPY them; the override
+# layers (deploy/config/<machine>/ then deploy/config/<target>/) are merged ON TOP
+# at deploy time by config-override.yml — that's what lands the tsync
+# GM-on-central / slave-on-compute split + the per-rig (rpi4 RTK) tweaks.
 - name: "Copy the REAL executor.json (→ notify supervisor reload)"
   ansible.builtin.copy:
     src: "{{ executor_src }}"

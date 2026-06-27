@@ -16,13 +16,14 @@ core never changes.
 Rooted at `$THEIA_WORKSPACE` (the workspace `theia dist` writes into):
 
 ```
-dist/manifest/<machine>/          the per-rig bundle (PACKAGES — theia owns)
+dist/manifest/<machine>/          the bundle (PACKAGES — theia owns; build-once, machine-generic)
   ├── executor.json + *.json       supervisor tree + manifest slices
-  ├── config/<fc>.json             per-FC config (already merged)
+  ├── config/<fc>.json             per-FC config (the gen-params default — NO override baked in)
   ├── <machine>.deb                the theia-release runtime/services .deb(s)
   └── certs/                       mTLS material
 deploy/registry/<target>.yml       WHICH host: ansible_host + machine slice (DEVICES — operator data)
-deploy/config/<target>/            per-target config overrides, deep-merged on top
+deploy/config/<machine>/           machine-shared config overrides, deep-merged at DEPLOY time
+deploy/config/<target>/            per-rig config overrides, deep-merged on top (rig wins)
 ```
 
 The seam is this filesystem bundle — **not** a code dependency on theia. colony

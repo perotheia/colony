@@ -1,46 +1,96 @@
-# config-override.yml — the per-TARGET config override pass.
+# config-override.yml — the DEPLOY-time config override pass (the SOLE merge
+# point; the built artifact is machine-generic, no override baked in).
 #
-# After seed-config.yml lands the machine-generic per-FC config on the device,
-# this deep-merges deploy/config/<target>/<fc>.json ON TOP — so a deploy target
-# keys its own profile off its NAME, not a synthetic artheia machine. Example:
-# the rpi4 GPS-feed box runs the `central` manifest but has no PTP NIC, so
-# deploy/config/rpi4/tsync.json disables ptp4l/phc2sys/gpsd.
+# seed-config.yml first lands the machine-generic per-FC config (config_src_dir,
+# i.e. dist/manifest/<machine>/config/<fc>.json — the pure `gen-params` default).
+# This task then deep-merges, IN ORDER, onto that base and pushes the result:
 #
-# The merge is done HERE, on the CONTROLLER, over the two parsed JSON docs that
-# BOTH live on the controller — the machine-generic profile (config_src_dir,
-# i.e. dist/manifest/<machine>/config/<fc>.json) and the per-target override
-# (deploy/config/<target>/<fc>.json) — with ansible's recursive combine(), then
-# the merged result is pushed (robust — no on-device JSON munging). Partial
-# override semantics match _deep_merge in theia.py: dicts merge key-by-key,
-# scalars/lists replace.
+#   1. deploy/config/<machine>/<fc>.json  — the MACHINE-shared layer (resolved
+#      from THIS target's machine slice). e.g. central=GPS-grandmaster vs
+#      compute=PTP-slave. Shared by every rig running that machine.
+#   2. deploy/config/<target>/<fc>.json   — the per-RIG layer, ON TOP. Keyed by
+#      the deploy TARGET (deploy/registry/<target>.yml), NOT the machine — so
+#      two boxes running the same `central` slice differ per rig. e.g. the rpi4
+#      RTK-GPS box disables ptp4l/phc2sys/gpsd.
 #
-# A target with no deploy/config/<target>/ dir is a no-op (the loop is empty).
-- name: "Find the per-target config overrides on the controller"
+# Both layers are PARTIAL (only the keys they change); combine(recursive=True)
+# merges dicts key-by-key, scalars/lists replace. The merge runs HERE on the
+# CONTROLLER over JSON that all lives on the controller (robust — no on-device
+# munging). `_comment*` keys (operator notes in an override) are stripped from
+# the pushed result so they never reach the device. A target/machine with no
+# override dir is a no-op.
+
+# The union of FC config files to (re)compute: every <fc>.json that exists in the
+# machine-generic base OR in either override layer. Driven off the base dir;
+# overrides without a base file are surfaced as a warning below.
+- name: "Enumerate the machine-generic per-FC config (the merge base set)"
+  ansible.builtin.find:
+    paths: "{{ config_src_dir }}"
+    patterns: "*.json"
+  delegate_to: localhost
+  become: false
+  register: _base_configs
+  failed_when: false
+
+- name: "Enumerate the machine-shared overrides"
+  ansible.builtin.find:
+    paths: "{{ machine_override_dir }}"
+    patterns: "*.json"
+  delegate_to: localhost
+  become: false
+  register: _machine_overrides
+  failed_when: false           # no per-machine dir → no machine layer, tolerate
+
+- name: "Enumerate the per-rig (target) overrides"
   ansible.builtin.find:
     paths: "{{ target_override_dir }}"
     patterns: "*.json"
   delegate_to: localhost
   become: false
   register: _target_overrides
-  failed_when: false           # no per-target dir → no overrides, tolerate
+  failed_when: false           # no per-target dir → no rig overrides, tolerate
 
-- name: "Deep-merge each override onto the machine-generic profile + push"
-  ansible.builtin.copy:
-    # base    = config_src_dir/<fc>.json (the machine-generic profile already
-    #           merged with deploy/config/<machine>/ at manifest time) — or {}
-    #           if this FC has no machine-generic file.
-    # override= deploy/config/<target>/<fc>.json (this loop item).
-    # Both read on the CONTROLLER; combine(recursive=True) merges dicts key-by-
-    # key, override scalars/lists win. The merged JSON is written to the device.
-    content: >-
-      {{
-        ((lookup('file', config_src_dir ~ '/' ~ (item.path | basename), errors='ignore') | default('{}', true) | from_json)
-          | combine((lookup('file', item.path) | from_json), recursive=True))
-        | to_nice_json
-      }}
-    dest: "{{ theia_root }}/config/{{ item.path | basename }}"
-    mode: "0644"
+# Warn (don't fail) if a rig override names an FC with no machine-generic base —
+# usually a stale filename or an FC not in this machine's slice. It still merges
+# onto {} so the operator's intent isn't dropped silently.
+- name: "Warn on per-rig overrides with no machine-generic base"
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: deploy/config/{{ deploy_target }}/{{ item.path | basename }} has no
+      machine-generic base in {{ machine }}/config/ — applied onto an empty base
+      (check the FC name / that it runs on '{{ machine }}').
   loop: "{{ _target_overrides.files | default([]) }}"
   loop_control:
-    label: "{{ deploy_target }}/{{ item.path | basename }}"
+    label: "{{ item.path | basename }}"
+  when: >-
+    (config_src_dir ~ '/' ~ (item.path | basename)) not in
+    (_base_configs.files | default([]) | map(attribute='path') | list)
+
+- name: "Deep-merge machine + rig overrides onto each base profile → push"
+  ansible.builtin.copy:
+    # base    = config_src_dir/<fc>.json (gen-params machine-generic default), or
+    #           {} if only an override exists.
+    # machine = deploy/config/<machine>/<fc>.json (the machine-shared layer).
+    # target  = deploy/config/<target>/<fc>.json  (the per-rig layer, wins).
+    # All read on the CONTROLLER; combined recursively, then `_comment*` keys are
+    # rejected from the top level (where operator notes live) before pushing.
+    content: >-
+      {{
+        ((lookup('file', config_src_dir ~ '/' ~ (item | basename), errors='ignore') | default('{}', true) | from_json)
+          | combine((lookup('file', machine_override_dir ~ '/' ~ (item | basename), errors='ignore') | default('{}', true) | from_json), recursive=True)
+          | combine((lookup('file', target_override_dir ~ '/' ~ (item | basename), errors='ignore') | default('{}', true) | from_json), recursive=True)
+          | dict2items | rejectattr('key', 'match', '^_comment') | items2dict)
+        | to_nice_json
+      }}
+    dest: "{{ theia_root }}/config/{{ item | basename }}"
+    mode: "0644"
+  # Only FCs that ACTUALLY have an override (machine or target) — pure-base FCs
+  # were already pushed verbatim by seed-config.yml, so re-pushing them here
+  # would just churn formatting and trip a needless supervisor reload.
+  loop: >-
+    {{ ((_machine_overrides.files | default([]) | map(attribute='path') | list)
+        + (_target_overrides.files | default([]) | map(attribute='path') | list))
+       | map('basename') | unique | list }}
+  loop_control:
+    label: "{{ deploy_target }}/{{ item | basename }}"
   notify: "reload supervisor"
