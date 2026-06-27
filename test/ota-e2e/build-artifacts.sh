@@ -24,15 +24,13 @@ log() { printf '\n[build] %s\n' "$*"; }
 cd "$DEMO_DIR"
 
 # ── 1. the DOCKER split manifest (services on central, demo apps on compute) ──
-# Use raw serialize-manifest, NOT `theia manifest`: the latter also runs gen-params
-# per FC for the config/ dir, and the demo's tsync package.art has a pre-existing
-# unresolved-type bug (GnssSolution) that makes gen-params exit non-zero and abort
-# the whole step. The per-FC config is non-essential for this test (the .art slave
-# defaults + the deploy/config override apply), so we skip it.
-log "serialize-manifest manifest.split.rig --attr DOCKER (demo workspace)"
-PYTHONPATH="$THEIA_DIR/artheia:$DEMO_DIR:$THEIA_DIR" \
-  artheia serialize-manifest manifest.split.rig --attr DOCKER --out "$DEMO_DIR/dist/manifest" \
-  || { echo "[build] serialize-manifest failed" >&2; exit 1; }
+# `theia manifest` (incl. per-FC config). The demo workspace must have its
+# system/platform/msgs link (theia init --with-services plants it) so services that
+# reference platform msgs — tsync → nav.GnssSolution — resolve; an older demo
+# without it fails gen-params. `theia init` is idempotent, so (re)link it here.
+log "theia init --with-services (idempotent — ensures the msgs link) + manifest split"
+( cd "$DEMO_DIR" && THEIA_INVOCATION_CWD="$DEMO_DIR" theia init --with-services --name demo >/dev/null 2>&1 || true )
+theia manifest split --attr DOCKER || { echo "[build] manifest failed" >&2; exit 1; }
 
 # Mark nm run_on_start=false in central's executor.json — nm would reconfigure the
 # host's net iface in a shared-namespace container and break the run. The supervisor
