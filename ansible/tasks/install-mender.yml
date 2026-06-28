@@ -97,11 +97,18 @@
     mode: "0755"
   when: _mender_mod_src.stat.exists | default(false)
 
-- name: "Pre-push the theia-release update module (dev controller only; else from the .deb)"
+- name: "Pre-push the theia update modules (dev controller only; else from the .deb)"
+  # BOTH custom modules: theia-release (full release-dir swap, the role/runtime OTA)
+  # and theia-app (day-2 app overlay into the running release — `theia release-app`).
+  # An older runtime .deb may ship only theia-release; pushing both here makes the
+  # app-plane OTA work without rebuilding the runtime.
   ansible.builtin.copy:
-    src: "{{ mender_artifacts_dir }}/modules/theia-release"
-    dest: /usr/share/mender/modules/v3/theia-release
+    src: "{{ mender_artifacts_dir }}/modules/{{ item }}"
+    dest: "/usr/share/mender/modules/v3/{{ item }}"
     mode: "0755"
+  loop:
+    - theia-release
+    - theia-app
   when: _mender_mod_src.stat.exists | default(false)
 
 - name: "Ensure the Mender scripts dir"
