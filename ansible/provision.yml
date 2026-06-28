@@ -36,6 +36,11 @@
         ansible_port: "{{ _rig.ansible_port | default(omit) }}"
         ansible_connection: "{{ _rig.ansible_connection | default(omit) }}"
         machine: "{{ _rig.machine }}"
+        # Mender compatibility gate: the device_type the rig enrols as. The
+        # gateway board enrols as `theia-gateway` so the gateway app artifact
+        # (compatible-devices: [theia-gateway]) targets it and the central/compute
+        # role artifacts (theia-rig) don't. Registry-driven; defaults to theia-rig.
+        mender_device_type: "{{ _rig.mender_device_type | default('theia-rig') }}"
         # L4-B: the cross-board TIPC eth bearer device (e.g. eth0). Empty/unset →
         # single-board rig, no bearer (tipc-bearer.yml is a no-op).
         tipc_bearer: "{{ _rig.tipc_bearer | default('') }}"

@@ -61,15 +61,17 @@
 
 - name: "Seed the Mender device identity (device_type + artifact_info)"
   # mender install gates on /var/lib/mender/device_type matching the artifact's
-  # compatible-devices (theia-rig), and reads /etc/mender/artifact_info for the
-  # current artifact name. On a server-enrolled rig these come from enrolment;
-  # for standalone OTA we seed them so `mender install` works out of the box.
+  # compatible-devices, and reads /etc/mender/artifact_info for the current
+  # artifact name. On a server-enrolled rig these come from enrolment; for
+  # standalone OTA we seed them so `mender install` works out of the box. The
+  # device_type is registry-driven (mender_device_type) so a gateway rig enrols
+  # as theia-gateway, not the hardcoded theia-rig.
   ansible.builtin.copy:
     dest: "{{ item.path }}"
     content: "{{ item.content }}\n"
     mode: "0644"
   loop:
-    - { path: /var/lib/mender/device_type, content: "device_type=theia-rig" }
+    - { path: /var/lib/mender/device_type, content: "device_type={{ mender_device_type | default('theia-rig') }}" }
     - { path: /etc/mender/artifact_info, content: "artifact_name=unprovisioned" }
   loop_control:
     label: "{{ item.path }}"
