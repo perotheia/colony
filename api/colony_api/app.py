@@ -1,0 +1,110 @@
+"""colony-api FastAPI app — Mender-Management-API-shaped routes over colony.
+
+Routes (deliberately mirroring the Mender deployments plane so gs-api fans out to
+both through one client shape — design §6):
+
+    GET  /rigs                          the deploy targets (≈ Mender devices)
+    GET  /deployments                   the run journal (active|scheduled|finished)
+    POST /deployments                   {rig, kind, schedule?} → enqueue a play
+    GET  /deployments/{id}              one deployment's status + statistics
+    GET  /deployments/{id}/log          the Ansible output (tail)
+    POST /deployments/{id}/abort        abort a pending/scheduled run
+
+Auth: an optional X-Colony-Key (COLONY_API_KEY) gates the mutating routes, the
+same pattern gs-api uses (unset → open for the gs-api-only path).
+"""
+from __future__ import annotations
+
+import os
+
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from . import __version__, registry
+from .runner import runner
+
+_VALID_KINDS = {"provision", "orchestrate", "cleanup"}
+
+
+def _require_key(x_colony_key: str | None = Header(default=None)) -> None:
+    want = os.environ.get("COLONY_API_KEY", "")
+    if want and x_colony_key != want:
+        raise HTTPException(status_code=401, detail="invalid or missing X-Colony-Key")
+
+
+class DeployRequest(BaseModel):
+    rig: str
+    kind: str = "orchestrate"           # provision | orchestrate | cleanup
+    schedule: float | None = None        # unix ts; None = run now
+    name: str | None = None
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="colony-api",
+                  version=__version__,
+                  description="Mender-shaped REST over the colony deploy adapter "
+                              "(base runtime+services deployments).")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip()
+                       for o in os.environ.get("COLONY_CORS_ORIGINS", "*").split(",")],
+        allow_methods=["*"], allow_headers=["*"], allow_credentials=False,
+    )
+
+    @app.get("/health", tags=["meta"])
+    def health() -> dict:
+        return {"status": "ok", "service": "colony-api", "version": __version__}
+
+    @app.get("/rigs", tags=["rigs"])
+    def rigs() -> dict:
+        return {"rigs": registry.list_rigs()}
+
+    @app.get("/rigs/{name}", tags=["rigs"])
+    def rig(name: str) -> dict:
+        r = registry.get_rig(name)
+        if not r:
+            raise HTTPException(status_code=404, detail=f"no rig '{name}'")
+        return r
+
+    @app.get("/deployments", tags=["deployments"])
+    def deployments() -> dict:
+        return {"deployments": runner.list()}
+
+    @app.post("/deployments", tags=["deployments"],
+              dependencies=[Depends(_require_key)])
+    def create_deployment(req: DeployRequest) -> dict:
+        if req.kind not in _VALID_KINDS:
+            raise HTTPException(status_code=400,
+                                detail=f"kind must be one of {sorted(_VALID_KINDS)}")
+        if not registry.rig_exists(req.rig):
+            raise HTTPException(status_code=404,
+                                detail=f"no rig '{req.rig}' in the registry")
+        return runner.create(req.rig, req.kind, req.schedule, req.name)
+
+    @app.get("/deployments/{did}", tags=["deployments"])
+    def get_deployment(did: str) -> dict:
+        d = runner.get(did)
+        if not d:
+            raise HTTPException(status_code=404, detail="no such deployment")
+        return d
+
+    @app.get("/deployments/{did}/log", tags=["deployments"])
+    def get_log(did: str) -> dict:
+        lg = runner.log(did)
+        if lg is None:
+            raise HTTPException(status_code=404, detail="no such deployment")
+        return {"id": did, "log": lg}
+
+    @app.post("/deployments/{did}/abort", tags=["deployments"],
+              dependencies=[Depends(_require_key)])
+    def abort_deployment(did: str) -> dict:
+        if not runner.abort(did):
+            raise HTTPException(status_code=409,
+                                detail="cannot abort (already running or finished)")
+        return runner.get(did) or {"id": did, "status": "finished"}
+
+    return app
+
+
+app = create_app()
