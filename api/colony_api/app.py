@@ -25,6 +25,19 @@ from pydantic import BaseModel
 from . import __version__, registry
 from .runner import runner
 
+
+def _split_hostport(host: str):
+    """Split an operator-entered 'ip[:port]' into (host, port). A local test rig
+    is a container on the dalek host net at a distinct SSH port (central :2201,
+    compute :2202); a real rig is ip:22. Returns (host, None) when no port given."""
+    h = (host or "").strip()
+    if h.count(":") == 1 and "]" not in h:        # ipv4 'host:port' (not ipv6)
+        a, _, b = h.partition(":")
+        if b.isdigit():
+            return a, b
+    return h, None
+
+
 _VALID_KINDS = {"provision", "orchestrate", "cleanup"}
 
 
@@ -157,9 +170,12 @@ def create_app() -> FastAPI:
             " sudo systemctl restart mender-auth 2>/dev/null || true) && "
             "echo set-identity-ok"
         )
+        h, port = _split_hostport(host)
         cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
-               "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa",
-               f"{user}@{host}", remote]
+               "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa"]
+        if port:
+            cmd += ["-p", port]
+        cmd += [f"{user}@{h}", remote]
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         except Exception as e:  # noqa: BLE001
@@ -200,9 +216,12 @@ def create_app() -> FastAPI:
             "cat /sys/class/net/eth0/address 2>/dev/null "
             "| sed 's/^/mac=/' || true"
         )
+        h, port = _split_hostport(host)
         cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
-               "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa",
-               f"{user}@{host}", remote]
+               "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa"]
+        if port:
+            cmd += ["-p", port]
+        cmd += [f"{user}@{h}", remote]
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         except Exception as e:  # noqa: BLE001
@@ -216,10 +235,11 @@ def create_app() -> FastAPI:
                 k, _, v = line.partition("=")
                 info[k.strip()] = v.strip()
         import uuid as _uuid
-        if not info.get("mac"):
-            raise HTTPException(status_code=502, detail=f"probe {host}: no MAC read")
-        # also mint a UUID the operator uses as the Controller ID (consistent
-        # with preauth); /set-identity writes it onto the device at Save.
+        # MAC is OPTIONAL now — identity is the minted UUID (a host-net container
+        # has no eth0). We still surface the MAC when present (real rigs), but a
+        # missing one never blocks enrolment.
+        # mint a UUID the operator uses as the Controller ID (consistent with
+        # preauth); /set-identity writes it onto the device at Save.
         return {"host": host, "mac": info.get("mac"),
                 "hostname": info.get("hostname"), "controller_id": str(_uuid.uuid4())}
 

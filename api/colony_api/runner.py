@@ -162,7 +162,12 @@ class Runner:
         if rec.get("host"):
             # per-device IP override (the device's local/remote_ip) — beats the
             # registry ansible_host. colony passes extra args after `--` to ansible.
-            cmd += ["--", "-e", "ansible_host=" + str(rec["host"])]
+            host_raw = str(rec["host"])
+            a_host, _, a_port = host_raw.partition(":")
+            extra = ["ansible_host=" + a_host]
+            if a_port.isdigit():
+                extra.append("ansible_port=" + a_port)
+            cmd += ["--", "-e", " ".join(extra)]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, env=env,
                                timeout=1800)
