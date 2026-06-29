@@ -78,12 +78,13 @@ class Runner:
 
     # ── public API (the routes call these) ──────────────────────────────────
     def create(self, rig: str, kind: str, schedule: float | None = None,
-               name: str | None = None) -> dict:
+               name: str | None = None, host: str | None = None) -> dict:
         did = uuid.uuid4().hex
         rec = {
             "id": did,
             "name": name or f"{kind}-{rig}",
             "rig": rig,
+            "host": host,            # explicit IP override (per-device deploy) or None
             "kind": kind,                       # provision | orchestrate | cleanup
             "authority": "colony",
             "artifact_name": f"{kind}:{rig}",   # gives the UI a stable label
@@ -158,6 +159,10 @@ class Runner:
         env = {**os.environ}
         # colony CLI resolves the registry/bundle from $THEIA_WORKSPACE.
         cmd = ["python3", str(_COLONY_BIN), rec["kind"], rec["rig"]]
+        if rec.get("host"):
+            # per-device IP override (the device's local/remote_ip) — beats the
+            # registry ansible_host. colony passes extra args after `--` to ansible.
+            cmd += ["--", "-e", "ansible_host=" + str(rec["host"])]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, env=env,
                                timeout=1800)

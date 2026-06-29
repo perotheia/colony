@@ -37,6 +37,7 @@ def _require_key(x_colony_key: str | None = Header(default=None)) -> None:
 class DeployRequest(BaseModel):
     rig: str
     kind: str = "orchestrate"           # provision | orchestrate | cleanup
+    host: str | None = None             # explicit IP override (per-device deploy)
     schedule: float | None = None        # unix ts; None = run now
     name: str | None = None
 
@@ -81,7 +82,7 @@ def create_app() -> FastAPI:
         if not registry.rig_exists(req.rig):
             raise HTTPException(status_code=404,
                                 detail=f"no rig '{req.rig}' in the registry")
-        return runner.create(req.rig, req.kind, req.schedule, req.name)
+        return runner.create(req.rig, req.kind, req.schedule, req.name, req.host)
 
     @app.get("/deployments/{did}", tags=["deployments"])
     def get_deployment(did: str) -> dict:
@@ -104,6 +105,23 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409,
                                 detail="cannot abort (already running or finished)")
         return runner.get(did) or {"id": did, "status": "finished"}
+
+    @app.get("/pubkey", tags=["enrol"])
+    def pubkey() -> dict:
+        """OUR SSH public key — the operator hands this to the 3rd party who
+        installed a (preauthorized) device, to add to the device's authorized_keys
+        so colony can SSH it for provision/orchestrate. Derived from the mounted
+        rig private key."""
+        try:
+            out = subprocess.run(
+                ["ssh-keygen", "-y", "-f", "/root/.ssh/id_rsa"],
+                capture_output=True, text=True, timeout=10)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"pubkey: {e}")
+        if out.returncode != 0:
+            raise HTTPException(status_code=500,
+                                detail=f"pubkey: {out.stderr.strip()[:200]}")
+        return {"pubkey": out.stdout.strip()}
 
     @app.get("/probe", tags=["enrol"])
     def probe(host: str) -> dict:
