@@ -16,6 +16,7 @@ same pattern gs-api uses (unset → open for the gs-api-only path).
 from __future__ import annotations
 
 import os
+import subprocess
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -103,6 +104,39 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409,
                                 detail="cannot abort (already running or finished)")
         return runner.get(did) or {"id": did, "status": "finished"}
+
+    @app.get("/probe", tags=["enrol"])
+    def probe(host: str) -> dict:
+        """SSH a host and read its stable identity for enrolment: the eth0 MAC
+        (the Mender identity key) + hostname. Uses the mounted rig SSH key. The
+        operator types a Host IP in the Create-Target modal; GS proxies here so
+        the modal can prefill Controller ID (MAC) + Name (hostname)."""
+        user = os.environ.get("COLONY_SSH_USER", "axadmin")
+        # one ssh, read both. eth0 first; fall back to the first non-lo iface.
+        # read hostname + eth0 MAC (fallback: first non-lo iface) in one ssh.
+        remote = (
+            "echo hostname=$(hostname); "
+            "cat /sys/class/net/eth0/address 2>/dev/null "
+            "| sed 's/^/mac=/' || true"
+        )
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+               "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa",
+               f"{user}@{host}", remote]
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"probe {host}: {e}")
+        if out.returncode != 0:
+            raise HTTPException(status_code=502,
+                                detail=f"probe {host} failed: {(out.stderr or out.stdout).strip()[:200]}")
+        info = {}
+        for line in out.stdout.splitlines():
+            if "=" in line:
+                k, _, v = line.partition("=")
+                info[k.strip()] = v.strip()
+        if not info.get("mac"):
+            raise HTTPException(status_code=502, detail=f"probe {host}: no MAC read")
+        return {"host": host, "mac": info.get("mac"), "hostname": info.get("hostname")}
 
     return app
 
