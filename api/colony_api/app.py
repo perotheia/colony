@@ -160,7 +160,7 @@ def create_app() -> FastAPI:
         # path is the mender default; we point the symlink target at our script.
         script = ("#!/bin/sh\necho device_id=" + cid + "\n")
         remote = (
-            "sudo install -d /etc/mender/identity && "
+            "sudo install -d /etc/mender/identity /usr/share/mender/identity && "
             "printf '%s' '" + script.replace("'", "'\\''") + "' | "
             "sudo tee /etc/mender/identity/mender-device-identity >/dev/null && "
             "sudo chmod 0755 /etc/mender/identity/mender-device-identity && "
