@@ -133,6 +133,42 @@ def create_app() -> FastAPI:
         finally:
             import shutil; shutil.rmtree(d, ignore_errors=True)
 
+    @app.post("/set-identity", tags=["enrol"])
+    def set_identity(body: dict) -> dict:
+        """Set a device's mender IDENTITY to a fixed UUID (so Mender matches by
+        device_id, consistent with preauth). SSHes the host, writes an identity
+        script that echoes device_id=<uuid>, restarts mender-auth. We're already
+        connected (the probe path), so this is the place to do it."""
+        host = body.get("host"); cid = body.get("controller_id")
+        if not host or not cid:
+            raise HTTPException(status_code=400, detail="host and controller_id required")
+        user = os.environ.get("COLONY_SSH_USER", "axadmin")
+        # write the identity script (idempotent) + restart mender-auth. The script
+        # path is the mender default; we point the symlink target at our script.
+        script = ("#!/bin/sh\necho device_id=" + cid + "\n")
+        remote = (
+            "sudo install -d /etc/mender/identity && "
+            "printf '%s' '" + script.replace("'", "'\\''") + "' | "
+            "sudo tee /etc/mender/identity/mender-device-identity >/dev/null && "
+            "sudo chmod 0755 /etc/mender/identity/mender-device-identity && "
+            "sudo ln -sf /etc/mender/identity/mender-device-identity "
+            "/usr/share/mender/identity/mender-device-identity && "
+            "(sudo systemctl restart mender-authd 2>/dev/null || "
+            " sudo systemctl restart mender-auth 2>/dev/null || true) && "
+            "echo set-identity-ok"
+        )
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+               "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa",
+               f"{user}@{host}", remote]
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"set-identity {host}: {e}")
+        if out.returncode != 0 or "set-identity-ok" not in out.stdout:
+            raise HTTPException(status_code=502,
+                                detail=f"set-identity {host} failed: {(out.stderr or out.stdout).strip()[:200]}")
+        return {"host": host, "controller_id": cid, "status": "identity-set"}
+
     @app.get("/pubkey", tags=["enrol"])
     def pubkey() -> dict:
         """OUR SSH public key — the operator hands this to the 3rd party who
@@ -179,9 +215,13 @@ def create_app() -> FastAPI:
             if "=" in line:
                 k, _, v = line.partition("=")
                 info[k.strip()] = v.strip()
+        import uuid as _uuid
         if not info.get("mac"):
             raise HTTPException(status_code=502, detail=f"probe {host}: no MAC read")
-        return {"host": host, "mac": info.get("mac"), "hostname": info.get("hostname")}
+        # also mint a UUID the operator uses as the Controller ID (consistent
+        # with preauth); /set-identity writes it onto the device at Save.
+        return {"host": host, "mac": info.get("mac"),
+                "hostname": info.get("hostname"), "controller_id": str(_uuid.uuid4())}
 
     return app
 
