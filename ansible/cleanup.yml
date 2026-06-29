@@ -44,7 +44,7 @@
   vars:
     theia_root: /opt/theia
     wipe_etcd: false
-    wipe_mender: false
+    wipe_mender: true
   tasks:
     - name: "Stop the supervisor (SIGTERM; PDEATHSIG reaps the children)"
       # Graceful: the supervisor SIGTERMs its tree on receipt. -f matches the
