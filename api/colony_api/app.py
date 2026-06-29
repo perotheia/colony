@@ -106,6 +106,33 @@ def create_app() -> FastAPI:
                                 detail="cannot abort (already running or finished)")
         return runner.get(did) or {"id": did, "status": "finished"}
 
+    @app.post("/normalize-key", tags=["enrol"])
+    def normalize_key(body: dict) -> dict:
+        """Normalize a public key to the PEM SubjectPublicKeyInfo Mender wants.
+        Accepts openssh ('ssh-rsa AAAA..', 'ssh-ed25519 ..') OR any PEM. colony-api
+        has ssh-keygen; gs-api (distroless) does not, so it proxies here."""
+        import tempfile, os as _os
+        key = (body.get("key") or "").strip()
+        if not key:
+            raise HTTPException(status_code=400, detail="empty key")
+        if "BEGIN PUBLIC KEY" in key:
+            return {"pem": key}                 # already SubjectPublicKeyInfo PEM
+        # openssh or PKCS1/other PEM → convert via ssh-keygen -e -m PKCS8
+        d = tempfile.mkdtemp()
+        try:
+            kp = _os.path.join(d, "k.pub")
+            with open(kp, "w") as f:
+                f.write(key if key.endswith("\n") else key + "\n")
+            out = subprocess.run(["ssh-keygen", "-e", "-m", "PKCS8", "-f", kp],
+                                 capture_output=True, text=True, timeout=10)
+            if out.returncode != 0 or "BEGIN PUBLIC KEY" not in out.stdout:
+                raise HTTPException(status_code=400,
+                    detail=f"unrecognized key (give an openssh 'ssh-rsa ..' line or a "
+                           f"PEM public key): {(out.stderr or '').strip()[:160]}")
+            return {"pem": out.stdout.strip()}
+        finally:
+            import shutil; shutil.rmtree(d, ignore_errors=True)
+
     @app.get("/pubkey", tags=["enrol"])
     def pubkey() -> dict:
         """OUR SSH public key — the operator hands this to the 3rd party who
