@@ -78,13 +78,15 @@ class Runner:
 
     # ── public API (the routes call these) ──────────────────────────────────
     def create(self, rig: str, kind: str, schedule: float | None = None,
-               name: str | None = None, host: str | None = None) -> dict:
+               name: str | None = None, host: str | None = None,
+               extra: dict | None = None) -> dict:
         did = uuid.uuid4().hex
         rec = {
             "id": did,
             "name": name or f"{kind}-{rig}",
             "rig": rig,
             "host": host,            # explicit IP override (per-device deploy) or None
+            "extra": extra or {},    # extra ansible vars (e.g. cleanup scope)
             "kind": kind,                       # provision | orchestrate | cleanup
             "authority": "colony",
             "artifact_name": f"{kind}:{rig}",   # gives the UI a stable label
@@ -164,10 +166,15 @@ class Runner:
             # registry ansible_host. colony passes extra args after `--` to ansible.
             host_raw = str(rec["host"])
             a_host, _, a_port = host_raw.partition(":")
-            extra = ["ansible_host=" + a_host]
+            ev = ["ansible_host=" + a_host]
             if a_port.isdigit():
-                extra.append("ansible_port=" + a_port)
-            cmd += ["--", "-e", " ".join(extra)]
+                ev.append("ansible_port=" + a_port)
+            for k, v in (rec.get("extra") or {}).items():
+                ev.append(f"{k}={v}")
+            cmd += ["--", "-e", " ".join(ev)]
+        elif rec.get("extra"):
+            ev = [f"{k}={v}" for k, v in rec["extra"].items()]
+            cmd += ["--", "-e", " ".join(ev)]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, env=env,
                                timeout=1800)

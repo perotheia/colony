@@ -48,8 +48,13 @@
   become: true
   vars:
     theia_root: /opt/theia
+    # SCOPE flags (operator picks in the GS cleanup dialog). app = the SWP
+    # overlay only; runtime = the whole /opt/theia base; mender = the device
+    # mender state (forces re-enrol). Defaults: app+runtime, NOT mender.
+    clean_app: true
+    clean_runtime: true
+    clean_mender: false
     wipe_etcd: false
-    wipe_mender: true
   tasks:
     - name: "Stop the supervisor (SIGTERM; PDEATHSIG reaps the children)"
       # Graceful: the supervisor SIGTERMs its tree on receipt. -f matches the
@@ -102,15 +107,44 @@
       changed_when: "'not installed' not in (_dpkg_r.stderr | default(''))"
       failed_when: false            # not installed (manual unpack) → tolerate
 
+    # ---- APP scope: drop the SWP overlay only (keep the runtime) ----------
+    - name: "Read the SWP install records (the overlaid procs per SWP)"
+      ansible.builtin.find:
+        paths: "{{ theia_root }}/swp"
+        file_type: directory
+        recurse: false
+      register: _swp_dirs
+      when: clean_app | bool and not (clean_runtime | bool)
+      failed_when: false
+
+    - name: "Remove the SWP records dir (the day-2 app overlay state)"
+      ansible.builtin.file:
+        path: "{{ theia_root }}/swp"
+        state: absent
+      when: clean_app | bool and not (clean_runtime | bool)
+      # NOTE: the SWP's FC binaries were overlaid into current/bin; with the
+      # runtime kept, a re-deploy of the SWP replaces them (idempotent module).
+      # A future theia-swp 'remove' state could prune the exact files; for now
+      # dropping the records + reloading the supervisor stops the app FCs.
+
+    - name: "Reload the supervisor so it drops the removed app nodes"
+      ansible.builtin.command: "{{ theia_root }}/bin/tdb reload"
+      when: clean_app | bool and not (clean_runtime | bool)
+      failed_when: false
+      changed_when: false
+
+    # ---- RUNTIME scope: remove the whole base install --------------------
     - name: "Remove the Theia install tree (/opt/theia)"
       ansible.builtin.file:
         path: "{{ theia_root }}"
         state: absent
+      when: clean_runtime | bool
 
     - name: "Remove the read-only manifest mount dir (/etc/theia/manifest)"
       ansible.builtin.file:
         path: /etc/theia/manifest
         state: absent
+      when: clean_runtime | bool
       failed_when: false
 
     # ---- flag-gated data wipes -------------------------------------------
@@ -128,7 +162,7 @@
         - /var/lib/mender/device_type
         - /etc/mender/artifact_info
         - /usr/share/mender/modules/v3/theia-release
-      when: wipe_mender | bool
+      when: clean_mender | bool
 
     - name: "Report"
       ansible.builtin.debug:

@@ -50,6 +50,8 @@ def _require_key(x_colony_key: str | None = Header(default=None)) -> None:
 class DeployRequest(BaseModel):
     rig: str
     kind: str = "orchestrate"           # provision | orchestrate | cleanup
+    extra: dict | None = None           # extra ansible vars, e.g. the cleanup
+                                        # scope {clean_app, clean_runtime, clean_mender}
     host: str | None = None             # explicit IP override (per-device deploy)
     schedule: float | None = None        # unix ts; None = run now
     name: str | None = None
@@ -95,7 +97,7 @@ def create_app() -> FastAPI:
         if not registry.rig_exists(req.rig):
             raise HTTPException(status_code=404,
                                 detail=f"no rig '{req.rig}' in the registry")
-        return runner.create(req.rig, req.kind, req.schedule, req.name, req.host)
+        return runner.create(req.rig, req.kind, req.schedule, req.name, req.host, req.extra)
 
     @app.get("/deployments/{did}", tags=["deployments"])
     def get_deployment(did: str) -> dict:
