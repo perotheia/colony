@@ -36,6 +36,11 @@
         groups: _cleanup_targets
         ansible_host: "{{ _rig.ansible_host }}"
         ansible_user: "{{ _rig.ansible_user | default('root') }}"
+        # carry the SSH port + connection from the registry (a local test rig is a
+        # container at a distinct port, e.g. :2201/:2202; without these cleanup
+        # connects to :22 and silently no-ops). Matches provision/orchestrate.
+        ansible_port: "{{ _rig.ansible_port | default(omit) }}"
+        ansible_connection: "{{ _rig.ansible_connection | default(omit) }}"
         machine: "{{ _rig.machine }}"
 
 - name: "Theia cleanup (uninstall the prior stack)"
