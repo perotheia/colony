@@ -21,18 +21,20 @@
     dest: /opt/theia/bin/theia-run
     mode: "0755"
 
-- name: "Render the theia-supervisor.service unit"
+- name: "Render the theia-supervisor.service unit (systemd hosts only)"
   ansible.builtin.template:
     src: templates/theia-supervisor.service.j2
     dest: /etc/systemd/system/theia-supervisor.service
     mode: "0644"
   register: _unit
+  when: ansible_service_mgr == "systemd"
 
-- name: "Reload systemd + enable the unit"
+- name: "Reload systemd + enable the unit (systemd hosts only)"
   ansible.builtin.systemd:
     name: theia-supervisor.service
     daemon_reload: true
     enabled: true
+  when: ansible_service_mgr == "systemd"
 
 - name: "Start (or restart on unit OR binary change) the supervisor"
   # Restart when the unit file changed OR the .deb was (re)installed (_dpkg from
@@ -43,3 +45,23 @@
   ansible.builtin.systemd:
     name: theia-supervisor.service
     state: "{{ 'restarted' if (_unit.changed or (_dpkg is defined and _dpkg.changed)) else 'started' }}"
+  when: ansible_service_mgr == "systemd"
+
+- name: "Start the supervisor directly (NO systemd — e.g. a container rig)"
+  # A systemd-less rig (Docker container running sshd as PID 1) can't use the
+  # unit; launch the supervisor via theia-run in the background instead. Kill
+  # any prior one first so a redeploy picks up the new binary. setsid detaches
+  # it from the SSH session so it survives the play.
+  ansible.builtin.shell: |
+    set +e
+    for pid in $(pgrep -f '{{ theia_root | default('/opt/theia') }}/bin/supervisor'); do
+      [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ] || kill -TERM "$pid" 2>/dev/null
+    done
+    sleep 1
+    setsid /opt/theia/bin/theia-run >/var/log/theia-supervisor.log 2>&1 < /dev/null &
+    true
+  args:
+    executable: /bin/bash
+  when: ansible_service_mgr != "systemd"
+  changed_when: true
+
