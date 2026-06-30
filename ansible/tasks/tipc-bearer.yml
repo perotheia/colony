@@ -10,12 +10,12 @@
 # Gated on the registry's `tipc_bearer` (e.g. eth0); single-board rigs omit it.
 # Idempotent: `tipc bearer enable` is a no-op-ish re-run (already-enabled errors
 # are ignored).
-- name: "Ensure the tipc kernel module is loaded"
-  community.general.modprobe:
-    name: tipc
-    state: present
+- name: "Ensure the tipc kernel module is loaded (best-effort; no collection)"
+  ansible.builtin.command: modprobe tipc
   become: true
-  failed_when: false
+  register: _tipc_modprobe
+  changed_when: false
+  failed_when: false   # a container shares the host TIPC ns / can't modprobe — fine
   when: tipc_bearer | default('') | length > 0
 
 - name: "Enable the TIPC eth bearer on {{ tipc_bearer }} (cross-board link)"
@@ -35,7 +35,7 @@
 
 # Persist across reboot: a systemd-networkd-independent oneshot that re-enables
 # the bearer at boot (the runtime modprobes tipc but doesn't enable bearers).
-- name: "Install a boot-time tipc-bearer oneshot unit"
+- name: "Install a boot-time tipc-bearer oneshot unit (systemd hosts only)"
   ansible.builtin.copy:
     dest: /etc/systemd/system/theia-tipc-bearer.service
     mode: "0644"
@@ -53,6 +53,7 @@
       [Install]
       WantedBy=multi-user.target
   become: true
+  when: ansible_service_mgr == "systemd"
   register: _tipc_unit
   when: tipc_bearer | default('') | length > 0
 
