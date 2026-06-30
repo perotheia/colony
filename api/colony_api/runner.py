@@ -110,6 +110,24 @@ class Runner:
             return [self._public(r) for r in sorted(
                 self._deps.values(), key=lambda r: r["created"], reverse=True)]
 
+    def prune(self, rig: str | None = None, finished_only: bool = True) -> int:
+        """Drop journal entries (default: FINISHED ones for `rig`) from memory
+        + rewrite the JSONL spill. Returns how many were removed. In-flight
+        (pending/inprogress/scheduled) are kept unless finished_only=False."""
+        keep_states = None if not finished_only else {FINISHED}
+        removed = 0
+        with self._lock:
+            for did in list(self._deps):
+                rec = self._deps[did]
+                if rig is not None and rec.get("rig") != rig:
+                    continue
+                if keep_states is not None and rec.get("status") not in keep_states:
+                    continue
+                del self._deps[did]
+                removed += 1
+            self._rewrite_journal()
+        return removed
+
     def get(self, did: str) -> dict | None:
         with self._lock:
             r = self._deps.get(did)
@@ -207,6 +225,19 @@ class Runner:
     # ── journal (JSONL spill so history survives a restart) ──────────────────
     def _public(self, rec: dict) -> dict:
         return {k: v for k, v in rec.items() if k != "log"}
+
+    def _rewrite_journal(self) -> None:
+        # Rewrite the JSONL spill from the in-memory map (after a prune).
+        # Caller holds the lock.
+        try:
+            _JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _JOURNAL.with_suffix(".jsonl.tmp")
+            with tmp.open("w") as f:
+                for rec in self._deps.values():
+                    f.write(json.dumps(rec) + "\n")
+            tmp.replace(_JOURNAL)
+        except OSError:
+            pass
 
     def _spill(self, rec: dict) -> None:
         try:

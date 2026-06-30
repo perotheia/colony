@@ -99,6 +99,15 @@ def create_app() -> FastAPI:
                                 detail=f"no rig '{req.rig}' in the registry")
         return runner.create(req.rig, req.kind, req.schedule, req.name, req.host, req.extra)
 
+    @app.delete("/deployments", tags=["deploy"])
+    def prune_deployments(rig: str | None = None,
+                          finished_only: bool = True) -> dict:
+        """Prune journal entries: default the FINISHED ones for `rig` (the GS
+        clear-actions button). In-flight are kept. Returns the removed count."""
+        n = runner.prune(rig, finished_only)
+        return {"pruned": n, "rig": rig}
+
+
     @app.get("/deployments/{did}", tags=["deployments"])
     def get_deployment(did: str) -> dict:
         d = runner.get(did)
