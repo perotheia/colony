@@ -109,6 +109,7 @@
   loop:
     - theia-release
     - theia-app
+    - theia-swp
   when: _mender_mod_src.stat.exists | default(false)
 
 - name: "Ensure the Mender scripts dir"
