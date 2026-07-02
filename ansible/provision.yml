@@ -20,22 +20,41 @@
     target: "{{ target | mandatory }}"
     registry_file: "{{ registry_dir }}/{{ target }}.yml"
   tasks:
-    - name: "Load the target's registry entry (host + machine slice)"
+    # registry-free: _rig defaults to {} and fields coalesce from -e vars +
+    # inventory constants. A legacy registry file, when present, still wins.
+    - name: "Seed an empty registry dict (registry-free default)"
+      ansible.builtin.set_fact:
+        _rig: {}
+    - name: "Load the target's registry entry if one exists (legacy/CLI path)"
       ansible.builtin.include_vars:
-        file: "{{ registry_file }}"
+        file: "{{ registry_dir }}/{{ target }}.yml"
         name: _rig
+      when:
+        - registry_dir is defined
+        - (registry_dir + '/' + target + '.yml') is exists
+    - name: "Resolve S3 vars from the registry for the manifest fetch"
+      ansible.builtin.set_fact:
+        s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
+        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default(s3_runtime_bucket | default('theia-runtime')) }}"
+        runtime_version: "{{ _rig.runtime_version | default(runtime_version | default('')) }}"
+        machine: "{{ _rig.machine | default(role | default(machine | default(''))) }}"
+        manifest_dir: "{{ manifest_dir }}"
+        theia_run_src: "{{ theia_run_src | default('') }}"
+    - name: "Fetch the deploy manifest from S3 (repoints manifest_dir)"
+      ansible.builtin.include_tasks: tasks/fetch-manifest-s3.yml
+
     - name: "Add the resolved target as an in-memory host"
       ansible.builtin.add_host:
         name: "{{ target }}"
         groups: _provision_targets
-        ansible_host: "{{ _rig.ansible_host }}"
-        ansible_user: "{{ _rig.ansible_user | default('root') }}"
+        ansible_host: "{{ _rig.ansible_host | default(ansible_host) }}"
+        ansible_user: "{{ _rig.ansible_user | default(ansible_user | default('root')) }}"
         # Optional transport overrides: a non-standard SSH port (two host-network
         # board containers can't both bind :22, so one runs sshd on e.g. 2222), or
         # a non-SSH connection (ansible_connection: docker/local). Default SSH:22.
-        ansible_port: "{{ _rig.ansible_port | default(omit) }}"
+        ansible_port: "{{ _rig.ansible_port | default(ansible_port | default(omit)) }}"
         ansible_connection: "{{ _rig.ansible_connection | default(omit) }}"
-        machine: "{{ _rig.machine }}"
+        machine: "{{ _rig.machine | default(role | default(machine | default(''))) }}"
         # Mender compatibility gate: the device_type the rig enrols as. The
         # gateway board enrols as `theia-gateway` so the gateway app artifact
         # (compatible-devices: [theia-gateway]) targets it and the central/compute
@@ -48,9 +67,14 @@
         # (the host/runner already runs one, e.g. a host-network container rig); the
         # listen/advertise hosts template the shared-etcd URLs. Must be threaded
         # through add_host or the etcd task sees the default (false) and collides.
-        etcd_external: "{{ _rig.etcd_external | default(false) }}"
-        etcd_listen_host: "{{ _rig.etcd_listen_host | default('0.0.0.0') }}"
-        etcd_advertise_host: "{{ _rig.etcd_advertise_host | default(_rig.ansible_host) }}"
+        etcd_external: "{{ _rig.etcd_external | default((role | default('')) == 'zonal') }}"
+        etcd_listen_host: "{{ _rig.etcd_listen_host | default(etcd_listen_host | default('127.0.0.1')) }}"
+        etcd_advertise_host: "{{ _rig.etcd_advertise_host | default(etcd_advertise_host | default(ansible_host | default('127.0.0.1'))) }}"
+        # Post-fetch S3 vars: the manifest cache + OTA asset paths the fetch task
+        # repointed on localhost — thread them so the play host reads from S3.
+        manifest_dir: "{{ manifest_dir }}"
+        theia_run_src: "{{ theia_run_src | default('') }}"
+        mender_artifacts_dir: "{{ mender_artifacts_dir | default('') }}"
 
 - name: "Theia provision (Phase 1 — base + Mender client)"
   hosts: _provision_targets
@@ -59,16 +83,13 @@
     theia_root: /opt/theia
     # the per-host machine.json on the CONTROLLER (read with the from_json filter)
     machine_json_path: "{{ manifest_dir }}/{{ machine }}/machine.json"
-    # The on-device Mender artifacts (theia-release update module + Mender→UCM
-    # state scripts) live in the framework's deploy/mender/ — they are NOT in the
-    # runtime .deb. Default to the framework checkout (manifest_dir is
-    # <ws>/dist/manifest, so deploy/mender is three dirs up + deploy/mender), so
-    # `mender install` finds the theia-release module on every board. Override with
-    # -e mender_artifacts_dir=<abs> if the controller's layout differs (an extra-var
-    # wins over this play var, so we must NOT self-reference mender_artifacts_dir
-    # here — `{{ mender_artifacts_dir | default(...) }}` is a recursive-loop template
-    # the moment the var is read. Compute the default into a distinct name.)
-    mender_artifacts_dir: "{{ manifest_dir }}/../../deploy/mender"
+    # The on-device Mender artifacts (theia-swp/theia-app/theia-release modules +
+    # Mender→UCM state scripts) ride in the S3 runtime manifest (platform/runtime/
+    # ota/) — the fetch task set mender_artifacts_dir to <cache>/ota and threaded
+    # it through add_host. Don't re-derive it here (that shadowed the S3 value).
+    # A fallback via _mender_artifacts_default only when the hostvar is empty (a
+    # local-checkout run with no S3).
+    _mender_artifacts_default: "{{ manifest_dir }}/../../platform/runtime/ota"
   tasks:
     - name: "Base dirs"
       ansible.builtin.file:

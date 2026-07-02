@@ -17,7 +17,7 @@
   # (<ws>/dist/manifest → ../../deploy/theia-run.sh), mirroring mender_artifacts_dir.
   # Override -e theia_run_src=<abs> if the controller vendors its own copy.
   ansible.builtin.copy:
-    src: "{{ theia_run_src | default(manifest_dir + '/../../deploy/theia-run.sh') }}"
+    src: "{{ theia_run_src if (theia_run_src | default('') | length > 0) else (manifest_dir + '/../../deploy/theia-run.sh') }}"
     dest: /opt/theia/bin/theia-run
     mode: "0755"
 
@@ -58,7 +58,7 @@
       [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ] || kill -TERM "$pid" 2>/dev/null
     done
     sleep 1
-    setsid /opt/theia/bin/theia-run >/var/log/theia-supervisor.log 2>&1 < /dev/null &
+    setsid env THEIA_MACHINE={{ machine }} THEIA_MACHINE_INSTANCE={{ machine_instance | default(0) }} /opt/theia/bin/theia-run >/var/log/theia-supervisor.log 2>&1 < /dev/null &
     true
   args:
     executable: /bin/bash

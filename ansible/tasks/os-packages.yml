@@ -5,13 +5,21 @@
 #
 # machine.json lives on the CONTROLLER; read it with from_json. When it's absent
 # (bare bring-up, no emitted manifest) skip — only the etcd special-case runs.
+# machine_json_path derives from manifest_dir; with S3 the fetch repointed it to
+# the controller-local cache. stat FIRST so a missing slice (a role-generic bare
+# provision) skips cleanly instead of a hard lookup() error.
+- name: "Stat machine.json (controller-side) — {{ machine }}"
+  ansible.builtin.stat:
+    path: "{{ machine_json_path }}"
+  delegate_to: localhost
+  become: false
+  register: _mj_stat
 - name: "Read machine.json (controller-side) — {{ machine }}"
   ansible.builtin.set_fact:
     _machine_doc: "{{ lookup('file', machine_json_path) | from_json }}"
   delegate_to: localhost
   become: false
-  failed_when: false
-  register: _mj
+  when: _mj_stat.stat.exists
 
 - name: "Compute apt os_packages (minus etcd-server)"
   ansible.builtin.set_fact:

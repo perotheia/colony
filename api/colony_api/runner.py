@@ -179,19 +179,17 @@ class Runner:
         env = {**os.environ}
         # colony CLI resolves the registry/bundle from $THEIA_WORKSPACE.
         cmd = ["python3", str(_COLONY_BIN), rec["kind"], rec["rig"]]
+        # REGISTRY-FREE: pass host + role as FLAGS so colony resolves the device
+        # from Mender (host) + the S3 manifest slice (role) with no registry file.
+        # Everything else (machine_instance, …) rides as -e k=v.
+        extra = dict(rec.get("extra") or {})
+        role = extra.pop("role", None)
         if rec.get("host"):
-            # per-device IP override (the device's local/remote_ip) — beats the
-            # registry ansible_host. colony passes extra args after `--` to ansible.
-            host_raw = str(rec["host"])
-            a_host, _, a_port = host_raw.partition(":")
-            ev = ["ansible_host=" + a_host]
-            if a_port.isdigit():
-                ev.append("ansible_port=" + a_port)
-            for k, v in (rec.get("extra") or {}).items():
-                ev.append(f"{k}={v}")
-            cmd += ["-e", " ".join(ev)]
-        elif rec.get("extra"):
-            ev = [f"{k}={v}" for k, v in rec["extra"].items()]
+            cmd += ["--host", str(rec["host"])]
+        if role:
+            cmd += ["--role", str(role)]
+        if extra:
+            ev = [f"{k}={v}" for k, v in extra.items()]
             cmd += ["-e", " ".join(ev)]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, env=env,

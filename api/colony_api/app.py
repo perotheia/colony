@@ -94,9 +94,14 @@ def create_app() -> FastAPI:
         if req.kind not in _VALID_KINDS:
             raise HTTPException(status_code=400,
                                 detail=f"kind must be one of {sorted(_VALID_KINDS)}")
-        if not registry.rig_exists(req.rig):
+        # registry-free: a request carrying an explicit host (the device's Mender
+        # reachable_ip, + role in extra) needs NO registry entry — colony resolves
+        # everything from Mender + the S3 manifest. Only a bare CLI-style request
+        # (no host) must match a registry rig.
+        if not req.host and not registry.rig_exists(req.rig):
             raise HTTPException(status_code=404,
-                                detail=f"no rig '{req.rig}' in the registry")
+                                detail=f"no rig '{req.rig}' in the registry "
+                                       "(and no host — pass host for registry-free)")
         return runner.create(req.rig, req.kind, req.schedule, req.name, req.host, req.extra)
 
     @app.delete("/deployments", tags=["deploy"])

@@ -52,37 +52,65 @@ def _ansible(playbook: str, args: list[str]) -> int:
     return _run(cmd, cwd=ANSIBLE)
 
 
-def _target(args: list[str], verb: str) -> tuple[str | None, list[str]]:
-    tgt, rest = None, []
-    for a in args:
-        if tgt is None and not a.startswith("-"):
-            tgt = a
-        else:
-            rest.append(a)
-    if not tgt:
-        print(f"colony {verb}: needs a target name "
-              f"(deploy/registry/<target>.yml), e.g. `colony {verb} rpi4`",
-              file=sys.stderr)
-    return tgt, rest
+def _split(args: list[str]) -> tuple[str | None, str | None, str | None, list[str]]:
+    """Parse: <rig> [--host IP[:PORT]] [--role master|zonal]. `rig` is the first
+    bare token (the deploy identity / instance name). --host + --role enable the
+    REGISTRY-FREE path (host from Mender via the GS, role picks the S3 manifest
+    slice). Everything else passes through to ansible."""
+    rig = host = role = None
+    rest: list[str] = []
+    it = iter(range(len(args)))
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--host" and i + 1 < len(args):
+            host = args[i + 1]; i += 2; continue
+        if a == "--role" and i + 1 < len(args):
+            role = args[i + 1]; i += 2; continue
+        if rig is None and not a.startswith("-"):
+            rig = a; i += 1; continue
+        rest.append(a); i += 1
+    return rig, host, role, rest
 
 
 def _verb(playbook: str, verb: str, args: list[str]) -> int:
-    tgt, rest = _target(args, verb)
-    if not tgt:
+    rig, host, role, rest = _split(args)
+    if not rig:
+        print(f"colony {verb}: needs a rig/instance name, e.g. "
+              f"`colony {verb} board-A --host 10.0.0.23:2201 --role zonal`",
+              file=sys.stderr)
         return 2
-    # Registry dir: $COLONY_REGISTRY overrides the default $THEIA_WORKSPACE/deploy/
-    # registry (mirrors $COLONY_ANSIBLE for playbooks). The playbooks already accept
-    # `-e registry_dir=…`; honor the same location for the existence pre-check + pass
-    # it through so the two never disagree. Lets a test/alt rig keep its registry
-    # outside the bundle workspace.
+
+    # REGISTRY-FREE path: --host + --role given. Host resolution comes from Mender
+    # (the GS deploy passes the device's reachable_ip); `role` (master|zonal) is the
+    # S3 manifest slice + the machine_index/etcd/mender-gw derivation. No registry
+    # file, no local $THEIA_WORKSPACE. Extra knobs (machine_instance, etc.) ride in
+    # `rest` as `-e k=v`. `machine` = the role so orchestrate reads manifest/<role>/.
+    if host or role:
+        if not (host and role):
+            print(f"colony {verb}: registry-free deploy needs BOTH --host and "
+                  f"--role (got host={host!r} role={role!r}).", file=sys.stderr)
+            return 2
+        a_host, _, a_port = host.partition(":")
+        ev = [f"target={rig}", f"machine={role}", f"role={role}",
+              f"ansible_host={a_host}"]
+        if a_port.isdigit():
+            ev.append(f"ansible_port={a_port}")
+        extra = []
+        for kv in ev:
+            extra += ["-e", kv]
+        return _ansible(playbook, [*extra, *rest])
+
+    # LEGACY path: resolve from a registry file (back-compat for CLI/dev use).
     reg_dir = Path(os.environ.get("COLONY_REGISTRY")
                    or (WORKSPACE / "deploy" / "registry"))
-    reg = reg_dir / f"{tgt}.yml"
+    reg = reg_dir / f"{rig}.yml"
     if not reg.is_file():
-        print(f"colony {verb}: no registry entry {reg} — add it (ansible_host + "
-              f"machine) to deploy this target.", file=sys.stderr)
+        print(f"colony {verb}: no registry entry {reg} and no --host/--role — pass "
+              f"`--host IP[:PORT] --role master|zonal` for a registry-free deploy.",
+              file=sys.stderr)
         return 1
-    return _ansible(playbook, ["-e", f"target={tgt}",
+    return _ansible(playbook, ["-e", f"target={rig}",
                                "-e", f"registry_dir={reg_dir}", *rest])
 
 

@@ -31,38 +31,63 @@
     target: "{{ target | mandatory }}"
     registry_file: "{{ registry_dir }}/{{ target }}.yml"
   tasks:
-    - name: "Load the target's registry entry (host + machine slice)"
+    # registry-free: _rig defaults to {} and every field coalesces from the
+    # -e vars (host/machine/role the GS deploy passes) + inventory constants
+    # (s3_endpoint/tipc_scope/etcd_*). A legacy registry file, when present, still
+    # wins via _rig.<field>.
+    - name: "Seed an empty registry dict (registry-free default)"
+      ansible.builtin.set_fact:
+        _rig: {}
+    - name: "Load the target's registry entry if one exists (legacy/CLI path)"
       ansible.builtin.include_vars:
-        file: "{{ registry_file }}"
+        file: "{{ registry_dir }}/{{ target }}.yml"
         name: _rig
+      when:
+        - registry_dir is defined
+        - (registry_dir + '/' + target + '.yml') is exists
+    # Pull the per-machine manifest+config from the S3 runtime plane (if the
+    # registry sets s3_endpoint + runtime_version) -> repoints manifest_dir at a
+    # controller-local cache. NO-OP when S3 isn't configured (local dist/ stands).
+    - name: "Resolve S3 vars from the registry for the manifest fetch"
+      ansible.builtin.set_fact:
+        s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
+        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default(s3_runtime_bucket | default('theia-runtime')) }}"
+        runtime_version: "{{ _rig.runtime_version | default(runtime_version | default('')) }}"
+        machine: "{{ _rig.machine | default(role | default(machine | default(''))) }}"
+    - name: "Fetch the deploy manifest from S3 (repoints manifest_dir)"
+      ansible.builtin.include_tasks: tasks/fetch-manifest-s3.yml
+
     - name: "Add the resolved target as an in-memory host"
       ansible.builtin.add_host:
         name: "{{ target }}"
         groups: _orchestrate_targets
-        ansible_host: "{{ _rig.ansible_host }}"
-        ansible_user: "{{ _rig.ansible_user | default('root') }}"
+        ansible_host: "{{ _rig.ansible_host | default(ansible_host) }}"
+        ansible_user: "{{ _rig.ansible_user | default(ansible_user | default('root')) }}"
         # Optional transport overrides (non-standard SSH port / non-SSH connection)
         # — see provision.yml. Default SSH:22.
-        ansible_port: "{{ _rig.ansible_port | default(omit) }}"
+        ansible_port: "{{ _rig.ansible_port | default(ansible_port | default(omit)) }}"
         ansible_connection: "{{ _rig.ansible_connection | default(omit) }}"
-        machine: "{{ _rig.machine }}"
+        machine: "{{ _rig.machine | default(role | default(machine)) }}"
         deploy_target: "{{ target }}"
+        manifest_dir: "{{ manifest_dir }}"
+        theia_run_src: "{{ theia_run_src | default('') }}"
+        mender_artifacts_dir: "{{ mender_artifacts_dir | default('') }}"
         # S3 runtime plane — propagate so the orchestrate play picks the S3-pull
         # path (install-runtime-s3.yml) instead of the local bundle. Empty/unset
         # runtime_version falls back to the local dist/<rig>/<rig>.deb.
-        runtime_version: "{{ _rig.runtime_version | default('') }}"
-        s3_endpoint: "{{ _rig.s3_endpoint | default('') }}"
-        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default('theia-runtime') }}"
+        runtime_version: "{{ _rig.runtime_version | default(runtime_version | default('')) }}"
+        s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
+        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default(s3_runtime_bucket | default('theia-runtime')) }}"
         deb_arch: "{{ _rig.deb_arch | default('amd64') }}"
         # L4-B: TIPC publication scope. 'cluster' makes a board's node services
         # reachable across the eth TIPC bearer (multi-board: compute↔central).
         # Default node-scope for single-board rigs (registry omits tipc_scope).
-        tipc_scope: "{{ _rig.tipc_scope | default('') }}"
+        tipc_scope: "{{ _rig.tipc_scope | default(tipc_scope | default('')) }}"
         # L4-C: per-machine TIPC instance index (central=0, compute=1, …). The
         # supervisor shifts each child node's --tipc instance by this, so the same
         # FC binary binds a distinct cluster address per board — V-UCM reaches a
         # SPECIFIC board's UCM via connect_instance(idx). Default 0 (single-board).
-        machine_instance: "{{ _rig.machine_instance | default('0') }}"
+        machine_instance: "{{ _rig.machine_instance | default(machine_instance | default('0')) }}"
 
 - name: "Theia orchestrate (Phase 2 — binaries + real config)"
   hosts: _orchestrate_targets

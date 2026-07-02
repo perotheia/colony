@@ -1,0 +1,51 @@
+# fetch-manifest-s3.yml — pull the per-machine deploy manifest + config FROM S3 as
+# ONE tarball (over plain HTTP — no aws cli), unpack to a controller-local temp,
+# then repoint manifest_dir at it. Runs on localhost in the RESOLVE play. NO-OP
+# when s3_endpoint/runtime_version are empty (local dist/ manifest stands).
+- name: "S3 manifest: is the runtime plane S3-configured for {{ target }}?"
+  ansible.builtin.set_fact:
+    _s3_manifest: "{{ (s3_endpoint | length > 0) and (runtime_version | length > 0) }}"
+
+- name: "S3 manifest: controller-local cache dir"
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: "colony-manifest-{{ target }}-"
+  register: _s3_manifest_tmp
+  when: _s3_manifest | bool
+  delegate_to: localhost
+  become: false
+
+- name: "S3 manifest: download manifest.tar.gz"
+  ansible.builtin.get_url:
+    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket }}/{{ runtime_version }}/manifest.tar.gz"
+    dest: "{{ _s3_manifest_tmp.path }}/manifest.tar.gz"
+    mode: "0644"
+  when: _s3_manifest | bool
+  delegate_to: localhost
+  become: false
+
+- name: "S3 manifest: unpack → cache"
+  ansible.builtin.unarchive:
+    src: "{{ _s3_manifest_tmp.path }}/manifest.tar.gz"
+    dest: "{{ _s3_manifest_tmp.path }}"
+    remote_src: true
+  when: _s3_manifest | bool
+  delegate_to: localhost
+  become: false
+
+- name: "S3 manifest: repoint manifest_dir at the S3 cache"
+  ansible.builtin.set_fact:
+    manifest_dir: "{{ _s3_manifest_tmp.path }}"
+  when: _s3_manifest | bool
+
+- name: "S3 manifest: point theia_run_src at the S3 cache copy (travels with manifest)"
+  ansible.builtin.set_fact:
+    theia_run_src: "{{ _s3_manifest_tmp.path }}/theia-run.sh"
+  when: _s3_manifest | bool
+
+- name: "S3 manifest: point mender_artifacts_dir at the S3 cache OTA assets"
+  ansible.builtin.set_fact:
+    # <cache>/ota holds modules/{theia-swp,theia-app,theia-release} + state-scripts/
+    # — colony pushes them to the rig (install-mender.yml) for container + board.
+    mender_artifacts_dir: "{{ _s3_manifest_tmp.path }}/ota"
+  when: _s3_manifest | bool

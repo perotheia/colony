@@ -20,7 +20,24 @@ _ws               = {{ lookup('env', 'THEIA_WORKSPACE') | default(playbook_dir +
 manifest_dir      = {{ _ws }}/dist/manifest
 registry_dir      = {{ _ws }}/deploy/registry
 config_override_dir = {{ _ws }}/deploy/config
-etcd_machine      = central
+etcd_machine      = master
+
+# ----- GENERIC CONSTANTS (fleet-wide) — moved off the per-target registry -----
+# The registry (deploy/registry/<target>.yml) is gone: host resolution comes from
+# Mender (the -e ansible_host/port the GS deploy passes) + these constants + the
+# S3 manifest's per-role machine.json. Override any with -e <var>=... .
+s3_endpoint         = {{ lookup('env', 'THEIA_S3_ENDPOINT') | default('http://10.0.0.99:9000', true) }}
+s3_runtime_bucket   = theia-runtime
+# TIPC publication scope: 'cluster' makes a board's node services reachable across
+# the eth bearer (multi-board). Fleet default; a single-board deploy is harmless.
+tipc_scope          = cluster
+# etcd lives on the MASTER only; DMZ-clean → bind loopback (the shared etcd is
+# reached over TIPC, not a routable etcd port). Workers set etcd_external.
+etcd_listen_host    = 127.0.0.1
+etcd_advertise_host = 127.0.0.1
+# Default SSH user for a rig (the GS deploy overrides ansible_host/port per device;
+# the user is constant for the fleet's rig image).
+ansible_user        = axadmin
 
 # ----- lab rig (the dev bench: dalek controller, rpi4 + x86 boxes) -----------
 [rig_lab:children]
