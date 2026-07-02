@@ -93,6 +93,7 @@ jobs:
             libnanopb-dev libboost-system-dev libboost-thread-dev libboost-random-dev \
             libssl-dev libprotobuf-dev protobuf-compiler \
             libgrpc++-dev protobuf-compiler-grpc libabsl-dev libcpprest-dev \
+            libeigen3-dev \
             libnftables-dev
           # Ubuntu 24.04's libnanopb-dev nests pb.h under /usr/include/nanopb/; the
           # FC protos #include <pb.h> at the top level. Symlink them up (no-op on

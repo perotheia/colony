@@ -2,9 +2,9 @@
 # run-full-story.sh — the FULL nightly CI story, no skips, on localhost docker compose.
 #
 #   1. fresh theia (assumed checked out)
-#   2. build runtime+services from manifest.services.services_rig → dist
+#   2. build runtime+services from manifest.services.rig (RIG=all 16 FCs) → dist
 #   3. theia release runtime+services → S3 (MinIO)
-#   4. colony provision (split_rig: central=singletons, compute=ucm+shwa) FROM S3
+#   4. colony provision (master=singletons, zonal=ucm+shwa) FROM S3
 #   5. theia init --with-services in demo/
 #   6. build demo/dist
 #   7. theia release user apps (manifest+config) → S3
@@ -65,7 +65,7 @@ log "STEP 1 — fresh theia (checked out at $THEIA_DIR)"; ok "theia present"
 ###############################################################################
 
 ###############################################################################
-log "STEP 2 — build runtime + services (manifest.services.services_rig) → dist"
+log "STEP 2 — build runtime + services (manifest.services.rig (RIG=all 16 FCs)) → dist"
 ###############################################################################
 cd "$THEIA_DIR"
 # The services deb's Depends line is distro-specific (com/per link grpc++/protobuf
@@ -119,14 +119,14 @@ bash "$HERE/helpers/push-runtime-s3.sh" "$RTVER" "$S3" "$RT_DEB" "$SV_DEB" || di
 ok "runtime+services published to s3://theia-runtime/$RTVER/ (bridge MinIO $MINIO_IP)"
 
 ###############################################################################
-log "STEP 4 — provision split_rig FROM S3 (central=singletons, compute=ucm+shwa)"
+log "STEP 4 — provision master+zonal FROM S3 (master=singletons, zonal=ucm+shwa)"
 ###############################################################################
 # serialize the SERVICES split (compute=ucm+shwa) → the bundle the colony registry
 # slices reference (executor.json per machine). This is the platform base.
 cd "$THEIA_DIR"
 PYTHONPATH="$THEIA_DIR/artheia:$THEIA_DIR" \
   artheia serialize-manifest manifest.services.rig --attr MULTI \
-  --out "$THEIA_DIR/dist/manifest" || die "split_rig serialize failed"
+  --out "$THEIA_DIR/dist/manifest" || die "rig MULTI serialize failed"
 # nm opts out of boot (would tear down the shared host iface).
 python3 - "$THEIA_DIR/dist/manifest/master/executor.json" <<'PY'
 import json,sys; p=sys.argv[1]; t=json.load(open(p))
@@ -147,7 +147,7 @@ MAN="-e manifest_dir=/repo/theia/dist/manifest"
 RUN="-e theia_run_src=/repo/theia/platform/runtime/ota/theia-run.sh"
 # provision (Phase 1: dirs/etcd/mender client) THEN orchestrate (Phase 2: pull the
 # runtime+services FROM S3 via install-runtime-s3, stage releases/<ver> + current,
-# start the supervisor). This is the split_rig PLATFORM base, all from S3.
+# start the supervisor). This is the master/zonal PLATFORM base, all from S3.
 for b in central compute; do
   log "provision $b (Phase 1)"
   ctl "$CENV /repo/colony/bin/colony provision $b $MAN -e mender_artifacts_dir=/repo/theia/platform/runtime/ota" \
@@ -160,10 +160,10 @@ sleep 8
 # Verify the boards INSTALLED FROM S3 (releases/<runtime_version> from the S3 pull).
 docker exec ota-central sh -c 'ls /opt/theia/releases/'"$RTVER"'/bin/ >/dev/null 2>&1' \
   || die "central not on the S3 release releases/$RTVER"
-ok "split_rig base from S3: central=$(bfc central) FCs [$(fcs central)] compute=$(bfc compute) FCs [$(fcs compute)]"
-# the split_rig contract: compute runs ucm + shwa (NOT demo apps yet).
+ok "master/zonal base from S3: central=$(bfc central) FCs [$(fcs central)] compute=$(bfc compute) FCs [$(fcs compute)]"
+# the zonal contract: compute runs ucm + shwa (NOT demo apps yet).
 docker exec ota-compute sh -c 'ps -eo args|grep -qE "/current/bin/ucm( |$)"' \
-  && ok "compute runs ucm (split_rig base)" || die "compute missing ucm (split_rig)"
+  && ok "compute runs ucm (zonal base)" || die "compute missing ucm (zonal)"
 
 ###############################################################################
 log "STEP 5 — theia init --with-services in demo/"
