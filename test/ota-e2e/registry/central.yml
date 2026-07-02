@@ -7,7 +7,7 @@
 ansible_host: ota-central
 ansible_connection: community.docker.docker
 ansible_user: root
-machine: central
+machine: master
 arch: x86_64
 deb_arch: amd64
 

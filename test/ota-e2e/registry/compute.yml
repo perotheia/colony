@@ -4,7 +4,7 @@
 ansible_host: ota-compute
 ansible_connection: community.docker.docker
 ansible_user: root
-machine: compute
+machine: zonal
 arch: x86_64
 deb_arch: amd64
 

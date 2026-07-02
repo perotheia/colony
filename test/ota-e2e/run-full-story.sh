@@ -125,10 +125,10 @@ log "STEP 4 — provision split_rig FROM S3 (central=singletons, compute=ucm+shw
 # slices reference (executor.json per machine). This is the platform base.
 cd "$THEIA_DIR"
 PYTHONPATH="$THEIA_DIR/artheia:$THEIA_DIR" \
-  artheia serialize-manifest manifest.services.split_rig --attr DOCKER \
+  artheia serialize-manifest manifest.services.rig --attr MULTI \
   --out "$THEIA_DIR/dist/manifest" || die "split_rig serialize failed"
 # nm opts out of boot (would tear down the shared host iface).
-python3 - "$THEIA_DIR/dist/manifest/central/executor.json" <<'PY'
+python3 - "$THEIA_DIR/dist/manifest/master/executor.json" <<'PY'
 import json,sys; p=sys.argv[1]; t=json.load(open(p))
 def f(n):
   if n.get("type")=="worker" and n.get("name")=="nm": n["run_on_start"]=False
@@ -144,13 +144,13 @@ for b in central compute; do
 done
 CENV="THEIA_WORKSPACE=/repo/theia COLONY_ANSIBLE=/repo/colony/ansible COLONY_REGISTRY=/repo/colony/test/ota-e2e/registry"
 MAN="-e manifest_dir=/repo/theia/dist/manifest"
-RUN="-e theia_run_src=/repo/theia/deploy/theia-run.sh"
+RUN="-e theia_run_src=/repo/theia/platform/runtime/ota/theia-run.sh"
 # provision (Phase 1: dirs/etcd/mender client) THEN orchestrate (Phase 2: pull the
 # runtime+services FROM S3 via install-runtime-s3, stage releases/<ver> + current,
 # start the supervisor). This is the split_rig PLATFORM base, all from S3.
 for b in central compute; do
   log "provision $b (Phase 1)"
-  ctl "$CENV /repo/colony/bin/colony provision $b $MAN -e mender_artifacts_dir=/repo/theia/deploy/mender" \
+  ctl "$CENV /repo/colony/bin/colony provision $b $MAN -e mender_artifacts_dir=/repo/theia/platform/runtime/ota" \
     || die "provision $b failed"
   log "orchestrate $b (install runtime+services FROM S3, start)"
   ctl "$CENV /repo/colony/bin/colony orchestrate $b $MAN $RUN -e autostart=true" \

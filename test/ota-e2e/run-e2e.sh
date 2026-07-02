@@ -98,7 +98,7 @@ log "PHASE 2 — provision + orchestrate both boards (colony ansible)"
 ###############################################################################
 for b in central compute; do
   log "provision $b"
-  colony provision "$b" "-e mender_artifacts_dir=/repo/theia/deploy/mender" || die "provision $b failed"
+  colony provision "$b" "-e mender_artifacts_dir=/repo/theia/platform/runtime/ota" || die "provision $b failed"
   log "orchestrate $b"
   colony orchestrate "$b" "-e autostart=true" || die "orchestrate $b failed"
 done
