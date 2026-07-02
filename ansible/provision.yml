@@ -25,13 +25,20 @@
     - name: "Seed an empty registry dict (registry-free default)"
       ansible.builtin.set_fact:
         _rig: {}
+    - name: "Stat the registry file (present only on the legacy/CLI path)"
+      ansible.builtin.stat:
+        path: "{{ registry_dir }}/{{ target }}.yml"
+      register: _reg_stat
+      when: registry_dir is defined
+      delegate_to: localhost
+      become: false
     - name: "Load the target's registry entry if one exists (legacy/CLI path)"
       ansible.builtin.include_vars:
         file: "{{ registry_dir }}/{{ target }}.yml"
         name: _rig
       when:
         - registry_dir is defined
-        - (registry_dir + '/' + target + '.yml') is exists
+        - _reg_stat.stat.exists | default(false)
     - name: "Resolve S3 vars from the registry for the manifest fetch"
       ansible.builtin.set_fact:
         s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
