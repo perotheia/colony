@@ -215,7 +215,7 @@ log "STEP 6 — build demo/dist (the user-apps composer)"
 cd "$DEMO_DIR"
 THEIA_WORKSPACE="$DEMO_DIR" THEIA_INVOCATION_CWD="$DEMO_DIR" theia manifest split --attr DOCKER \
   || die "demo manifest failed"
-THEIA_WORKSPACE="$DEMO_DIR" theia dist || die "demo dist failed"
+THEIA_WORKSPACE="$DEMO_DIR" theia dist split --attr DOCKER || die "demo dist failed"
 ok "demo/dist built (central=services, compute=p1-p4+shwa)"
 
 ###############################################################################
