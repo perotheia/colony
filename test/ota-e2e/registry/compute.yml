@@ -4,7 +4,9 @@
 ansible_host: ota-compute
 ansible_connection: community.docker.docker
 ansible_user: root
-machine: zonal
+machine: compute   # unique machine NAME → manifest/compute/
+role: zonal        # DEPLOYMENT identity (etcd_external, mender agent)
+etcd_external: true
 arch: x86_64
 deb_arch: amd64
 
