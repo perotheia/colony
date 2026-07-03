@@ -22,9 +22,6 @@
   tasks:
     # registry-free: _rig defaults to {} and fields coalesce from -e vars +
     # inventory constants. A legacy registry file, when present, still wins.
-    - name: "Seed an empty registry dict (registry-free default)"
-      ansible.builtin.set_fact:
-        _rig: {}
     - name: "Stat the registry file (present only on the legacy/CLI path)"
       ansible.builtin.stat:
         path: "{{ registry_dir }}/{{ target }}.yml"
@@ -32,13 +29,22 @@
       when: registry_dir is defined
       delegate_to: localhost
       become: false
+    # Load the registry entry into a DISTINCT var (_rig_file) — NOT _rig — because
+    # a later `set_fact _rig` would otherwise OUTRANK include_vars precedence and
+    # shadow the load (the bug that sent every target to SSH 127.0.0.1:22). We then
+    # set_fact _rig FROM _rig_file so the loaded entry wins (set_fact vs set_fact =
+    # last-wins). Registry-free (no file) → _rig stays {} and fields coalesce from
+    # -e vars + inventory constants.
     - name: "Load the target's registry entry if one exists (legacy/CLI path)"
       ansible.builtin.include_vars:
         file: "{{ registry_dir }}/{{ target }}.yml"
-        name: _rig
+        name: _rig_file
       when:
         - registry_dir is defined
         - _reg_stat.stat.exists | default(false)
+    - name: "Resolve _rig (loaded entry wins over the empty default via set_fact)"
+      ansible.builtin.set_fact:
+        _rig: "{{ _rig_file | default({}) }}"
     - name: "Fail fast if a registry_dir was passed but its entry is missing"
       ansible.builtin.fail:
         msg: >-
