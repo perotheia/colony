@@ -146,12 +146,8 @@ for i in $(seq 1 20); do
 done
 [ -n "${MINIO_IP:-}" ] || die "MinIO not ready on the bridge"
 S3="http://$MINIO_IP:9000"          # host-side push target (boards use ota-minio:9000)
-bash "$HERE/helpers/push-runtime-s3.sh" "$RTVER" "$S3" "$RT_DEB" "$SV_DEB" || die "runtime → S3 push failed"
-ok "runtime+services published to s3://theia-runtime/$RTVER/ (bridge MinIO $MINIO_IP)"
-
-###############################################################################
-log "STEP 4 — provision master+zonal FROM S3 (master=singletons, zonal=ucm+shwa)"
-###############################################################################
+# Serialize the runtime manifest FIRST — push-runtime-s3.sh bundles
+# dist/manifest into manifest.tar.gz (the object provision fetches).
 # serialize the SERVICES split (compute=ucm+shwa) → the bundle the colony registry
 # slices reference (executor.json per machine). This is the platform base.
 cd "$THEIA_DIR"
@@ -166,6 +162,15 @@ def f(n):
   for c in n.get("children",[]): f(c)
 f(t); json.dump(t,open(p,"w"),indent=2)
 PY
+
+bash "$HERE/helpers/push-runtime-s3.sh" "$RTVER" "$S3" "$RT_DEB" "$SV_DEB" || die "runtime → S3 push failed"
+ok "runtime+services published to s3://theia-runtime/$RTVER/ (bridge MinIO $MINIO_IP)"
+
+###############################################################################
+log "STEP 4 — provision master+zonal FROM S3 (master=singletons, zonal=ucm+shwa)"
+###############################################################################
+# (the manifest was serialized in STEP 3, before the runtime push, so
+# push-runtime-s3.sh could bundle it into manifest.tar.gz.)
 # bring up boards + controller
 COLONY_DIR="$COLONY_DIR" THEIA_DIR="$THEIA_DIR" GROUND_STATION_DIR="$GROUND_STATION_DIR" \
   $COMPOSE up -d --build central compute controller 2>&1 | tail -2
