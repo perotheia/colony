@@ -61,6 +61,37 @@ bfc(){ docker exec "ota-$1" sh -c 'ps -eo args 2>/dev/null|grep -c "/opt/theia/c
 fcs(){ docker exec "ota-$1" sh -c 'ps -eo args 2>/dev/null|grep "/opt/theia/current/bin/"|grep -v grep|sed "s|.*/bin/||;s| .*||"|sort|tr "\n" " "' 2>/dev/null; }
 
 ###############################################################################
+# PRE-FLIGHT — free the ports a LOCAL dev stack holds, so the e2e's own
+# containers can bind them. When run on a dev box (not a clean CI runner), a
+# leftover `theia rig up` (deploy/docker-compose.yml: theia-central/compute +
+# etcd) or a `theia start` supervisor holds the SAME host ports the e2e maps:
+# com's gRPC views 7700/7710/7711 (ota-central) and MinIO 9000/9001 (ota-minio).
+# A collision surfaces as "port is already allocated" on `compose up`. Bring the
+# theia rig DOWN and stop any local supervisor + stray ota-* containers first.
+# No-op on a clean CI runner (nothing to tear down).
+###############################################################################
+preflight_teardown() {
+  log "pre-flight — free local ports (theia rig down + stray containers)"
+  # 1) the theia dev rig (deploy/docker-compose.yml) — down if the theia CLI is on
+  #    PATH and a compose file exists. Ignore failures (no stack / no compose).
+  if command -v theia >/dev/null 2>&1 && [ -f "$THEIA_DIR/deploy/docker-compose.yml" ]; then
+    ( cd "$THEIA_DIR" && theia rig down ) >/dev/null 2>&1 || true
+    docker compose -f "$THEIA_DIR/deploy/docker-compose.yml" --profile etcd down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+  # 2) a local `theia start` supervisor holding 7700/7710/7711 (com gRPC views).
+  #    Kill only supervisors bound to those ports (leave unrelated ones alone).
+  for port in 7700 7710 7711 9000 9001; do
+    pid="$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)" || true
+    [ -n "${pid:-}" ] && { echo "  freeing :$port (pid $pid)"; kill "$pid" 2>/dev/null || true; }
+  done
+  # 3) stray ota-* containers from a prior aborted run (compose down missed them).
+  docker rm -f ota-central ota-compute ota-controller ota-minio ota-etcd >/dev/null 2>&1 || true
+  $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
+  ok "pre-flight teardown done (ports 7700/7710/7711/9000/9001 free)"
+}
+preflight_teardown
+
+###############################################################################
 log "STEP 1 — fresh theia (checked out at $THEIA_DIR)"; ok "theia present"
 ###############################################################################
 

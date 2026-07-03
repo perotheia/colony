@@ -39,6 +39,18 @@
       when:
         - registry_dir is defined
         - _reg_stat.stat.exists | default(false)
+    - name: "Fail fast if a registry_dir was passed but its entry is missing"
+      ansible.builtin.fail:
+        msg: >-
+          registry_dir={{ registry_dir }} was passed but
+          {{ registry_dir }}/{{ target }}.yml does not exist on the controller.
+          The legacy/CLI path needs it for ansible_host/ansible_connection —
+          without it the target falls back to SSH 127.0.0.1:22 (UNREACHABLE).
+          Check the path is mounted/readable on the controller, or use the
+          registry-free path (--host IP --role master|zonal).
+      when:
+        - registry_dir is defined
+        - not (_reg_stat.stat.exists | default(false))
     - name: "Resolve S3 vars from the registry for the manifest fetch"
       ansible.builtin.set_fact:
         s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
