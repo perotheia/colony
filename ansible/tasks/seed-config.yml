@@ -14,6 +14,18 @@
     mode: "0644"
   notify: "reload supervisor"
 
+# machines.json → config/ so com reads the AUTHORITATIVE instance→machine_index→
+# name map (theia-run.sh sets THEIA_MACHINE_MANIFEST=config when this is present).
+# The unique machine NAME is the runtime identity com/GUI key on. Top-level file
+# (manifest_dir/machines.json), not per-machine. Tolerate its absence (older
+# manifests / a single-machine slice) — com falls back to supervisor-reported name.
+- name: "Copy machines.json → config/ (com's machine_index reference)"
+  ansible.builtin.copy:
+    src: "{{ manifest_dir }}/machines.json"
+    dest: "{{ theia_root }}/config/machines.json"
+    mode: "0644"
+  failed_when: false
+
 - name: "Find the per-FC config profiles on the controller"
   ansible.builtin.find:
     paths: "{{ config_src_dir }}"
