@@ -269,6 +269,11 @@ log "STEP 8 — orchestrate central+compute from demo/manifest (apps OTA)"
 ###############################################################################
 # Mender server up (the app OTA transport), then JOIN its traefik to the ota-e2e
 # bridge so the boards (own netns) reach the API by IP — the dalek-safe model.
+# RESET first: the mender_mongo/s3 volumes PERSIST across runs (up.sh reuses
+# them), so stale deviceauth auth-sets accumulate → a re-enrolling board (same
+# MAC identity) gets "dev auth: unauthorized" instead of landing PENDING. Wipe
+# the state (keeps the pulled images — no ~2GB re-pull).
+MENDER_SERVER_DIR="$SERVER_DIR" bash "$GROUND_STATION_DIR/mender/server/up.sh" reset
 MENDER_SERVER_DIR="$SERVER_DIR" bash "$GROUND_STATION_DIR/mender/server/up.sh" up
 MENDER_SERVER_DIR="$SERVER_DIR" bash "$GROUND_STATION_DIR/mender/server/up.sh" user "$MENDER_EMAIL" "$MENDER_PASS" 2>/dev/null||true
 cp "$SERVER_DIR/compose/certs/mender.crt" "$GROUND_STATION_DIR/.srv-ca.crt"
