@@ -8,6 +8,18 @@
 # machine_json_path derives from manifest_dir; with S3 the fetch repointed it to
 # the controller-local cache. stat FIRST so a missing slice (a role-generic bare
 # provision) skips cleanly instead of a hard lookup() error.
+# BASE packages every theia rig needs regardless of what machine.json declares:
+# procps (pgrep/pkill) is used by etcd-start.sh + the supervisor's process
+# management. Install it FIRST so the etcd task (which runs right after) has
+# pgrep — a fresh minimal container ships without it. Idempotent.
+- name: "Install base os packages (procps — pgrep for etcd-start + supervisor)"
+  ansible.builtin.apt:
+    name:
+      - procps
+    state: present
+    update_cache: true
+  failed_when: false   # offline rig: tolerate; a real board's base image has it
+
 - name: "Stat machine.json (controller-side) — {{ machine }}"
   ansible.builtin.stat:
     path: "{{ machine_json_path }}"

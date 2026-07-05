@@ -18,7 +18,6 @@
 # bare framework run still works. Override any with -e <var>=/abs/path.
 _ws               = {{ lookup('env', 'THEIA_WORKSPACE') | default(playbook_dir + '/../..', true) }}
 manifest_dir      = {{ _ws }}/dist/manifest
-registry_dir      = {{ _ws }}/deploy/registry
 config_override_dir = {{ _ws }}/deploy/config
 etcd_machine      = master
 

@@ -19,29 +19,34 @@
 #       (add -e wipe_etcd=true -e wipe_mender=true for a full factory wipe)
 # The target rig is resolved by NAME from deploy/registry/<target>.yml (host +
 # the artheia `machine` slice) — same registry as `theia orchestrate`.
-- name: "Resolve the deploy target from the registry"
+- name: "Resolve the deploy target (S3-EXCLUSIVE — no registry)"
   hosts: localhost
   gather_facts: false
   vars:
     target: "{{ target | mandatory }}"
-    registry_file: "{{ registry_dir }}/{{ target }}.yml"
   tasks:
-    - name: "Load the target's registry entry (host + machine slice)"
-      ansible.builtin.include_vars:
-        file: "{{ registry_file }}"
-        name: _rig
+    # S3-exclusive: the GS passes --host/ansible_host + role per target. No
+    # registry file.
+    - name: "Require ansible_host (the GS provides it; no registry fallback)"
+      ansible.builtin.assert:
+        that:
+          - ansible_host is defined
+          - ansible_host | default('') | length > 0
+        fail_msg: >-
+          ansible_host is required (colony is S3-exclusive — no registry). Pass
+          -e ansible_host=<ip> -e role=master|zonal (the GS does this).
     - name: "Add the resolved target as an in-memory host"
       ansible.builtin.add_host:
         name: "{{ target }}"
         groups: _cleanup_targets
-        ansible_host: "{{ _rig.ansible_host }}"
-        ansible_user: "{{ _rig.ansible_user | default('root') }}"
-        # carry the SSH port + connection from the registry (a local test rig is a
-        # container at a distinct port, e.g. :2201/:2202; without these cleanup
-        # connects to :22 and silently no-ops). Matches provision/orchestrate.
-        ansible_port: "{{ _rig.ansible_port | default(omit) }}"
-        ansible_connection: "{{ _rig.ansible_connection | default(omit) }}"
-        machine: "{{ _rig.machine }}"
+        ansible_host: "{{ ansible_host }}"
+        ansible_user: "{{ ansible_user | default('root') }}"
+        # carry the SSH port + connection (a local test rig is a container at a
+        # distinct port, e.g. :2201/:2202; without these cleanup connects to :22
+        # and silently no-ops). Matches provision/orchestrate.
+        ansible_port: "{{ ansible_port | default(omit) }}"
+        ansible_connection: "{{ target_connection | default('ssh') }}"
+        machine: "{{ role | default(machine | default('')) }}"
 
 - name: "Theia cleanup (uninstall the prior stack)"
   hosts: _cleanup_targets
@@ -169,5 +174,5 @@
         msg: >-
           Theia removed from {{ inventory_hostname }} ({{ machine }}).
           etcd data {{ 'WIPED' if wipe_etcd | bool else 'kept' }};
-          Mender {{ 'WIPED' if wipe_mender | bool else 'kept' }}.
+          Mender {{ 'WIPED' if clean_mender | bool else 'kept' }}.
           Run `theia orchestrate {{ machine }}` to install the new bundle.

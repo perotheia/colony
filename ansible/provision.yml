@@ -13,56 +13,31 @@
 # Run:  ansible-playbook provision.yml -l rpi4
 #       (theia.py `provision <machine>` wraps this, limiting to the host whose
 #        machine= matches)
-- name: "Resolve the deploy target from the registry"
+- name: "Resolve the deploy target (S3-EXCLUSIVE — no registry)"
   hosts: localhost
   gather_facts: false
   vars:
     target: "{{ target | mandatory }}"
-    registry_file: "{{ registry_dir }}/{{ target }}.yml"
   tasks:
-    # registry-free: _rig defaults to {} and fields coalesce from -e vars +
-    # inventory constants. A legacy registry file, when present, still wins.
-    - name: "Stat the registry file (present only on the legacy/CLI path)"
-      ansible.builtin.stat:
-        path: "{{ registry_dir }}/{{ target }}.yml"
-      register: _reg_stat
-      when: registry_dir is defined
-      delegate_to: localhost
-      become: false
-    # Load the registry entry into a DISTINCT var (_rig_file) — NOT _rig — because
-    # a later `set_fact _rig` would otherwise OUTRANK include_vars precedence and
-    # shadow the load (the bug that sent every target to SSH 127.0.0.1:22). We then
-    # set_fact _rig FROM _rig_file so the loaded entry wins (set_fact vs set_fact =
-    # last-wins). Registry-free (no file) → _rig stays {} and fields coalesce from
-    # -e vars + inventory constants.
-    - name: "Load the target's registry entry if one exists (legacy/CLI path)"
-      ansible.builtin.include_vars:
-        file: "{{ registry_dir }}/{{ target }}.yml"
-        name: _rig_file
-      when:
-        - registry_dir is defined
-        - _reg_stat.stat.exists | default(false)
-    - name: "Resolve _rig (loaded entry wins over the empty default via set_fact)"
+    # colony is S3-EXCLUSIVE: every field comes from the -e vars the GS passes
+    # (--host/ansible_host, role/machine, runtime_version) + inventory constants
+    # (s3_endpoint, etc.). No registry file, no legacy/CLI fallback. ansible_host
+    # is mandatory — the GS always provides it (SSH-probed from Mender).
+    - name: "Require ansible_host (the GS provides it; no registry fallback)"
+      ansible.builtin.assert:
+        that:
+          - ansible_host is defined
+          - ansible_host | default('') | length > 0
+        fail_msg: >-
+          ansible_host is required (colony is S3-exclusive — no registry). The
+          GS passes --host <ip> per target; a bare CLI run must pass -e
+          ansible_host=<ip> -e role=master|zonal.
+    - name: "Resolve S3 vars for the manifest fetch"
       ansible.builtin.set_fact:
-        _rig: "{{ _rig_file | default({}) }}"
-    - name: "Fail fast if a registry_dir was passed but its entry is missing"
-      ansible.builtin.fail:
-        msg: >-
-          registry_dir={{ registry_dir }} was passed but
-          {{ registry_dir }}/{{ target }}.yml does not exist on the controller.
-          The legacy/CLI path needs it for ansible_host/ansible_connection —
-          without it the target falls back to SSH 127.0.0.1:22 (UNREACHABLE).
-          Check the path is mounted/readable on the controller, or use the
-          registry-free path (--host IP --role master|zonal).
-      when:
-        - registry_dir is defined
-        - not (_reg_stat.stat.exists | default(false))
-    - name: "Resolve S3 vars from the registry for the manifest fetch"
-      ansible.builtin.set_fact:
-        s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
-        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default(s3_runtime_bucket | default('theia-runtime')) }}"
-        runtime_version: "{{ _rig.runtime_version | default(runtime_version | default('')) }}"
-        machine: "{{ _rig.machine | default(role | default(machine | default(''))) }}"
+        s3_endpoint: "{{ s3_endpoint | default('') }}"
+        s3_runtime_bucket: "{{ s3_runtime_bucket | default('theia-runtime') }}"
+        runtime_version: "{{ runtime_version | default('') }}"
+        machine: "{{ role | default(machine | default('')) }}"
         manifest_dir: "{{ manifest_dir }}"
         theia_run_src: "{{ theia_run_src | default('') }}"
     - name: "Fetch the deploy manifest from S3 (repoints manifest_dir)"
@@ -72,29 +47,37 @@
       ansible.builtin.add_host:
         name: "{{ target }}"
         groups: _provision_targets
-        ansible_host: "{{ _rig.ansible_host | default(ansible_host) }}"
-        ansible_user: "{{ _rig.ansible_user | default(ansible_user | default('root')) }}"
+        ansible_host: "{{ ansible_host }}"
+        ansible_user: "{{ ansible_user | default('root') }}"
         # Optional transport overrides: a non-standard SSH port (two host-network
         # board containers can't both bind :22, so one runs sshd on e.g. 2222), or
-        # a non-SSH connection (ansible_connection: docker/local). Default SSH:22.
-        ansible_port: "{{ _rig.ansible_port | default(ansible_port | default(omit)) }}"
-        ansible_connection: "{{ _rig.ansible_connection | default(omit) }}"
-        machine: "{{ _rig.machine | default(role | default(machine | default(''))) }}"
+        # a non-SSH connection. Default SSH:22.
+        ansible_port: "{{ ansible_port | default(omit) }}"
+        # CONNECTION: read a DEDICATED var (target_connection), NOT ansible_connection.
+        # This add_host runs inside the `hosts: localhost` resolve-play, where
+        # ansible_connection is ALREADY defined as 'local' (localhost's implicit
+        # connection). `{{ ansible_connection | default('ssh') }}` would therefore
+        # inherit 'local' — the added board host would then run every task ON THE
+        # CONTROLLER (copies landing in the controller's /usr/share/mender, deploys
+        # silently no-op'ing the board). The docker-test-rig path overrides with
+        # -e target_connection=community.docker.docker.
+        ansible_connection: "{{ target_connection | default('ssh') }}"
+        machine: "{{ role | default(machine | default('')) }}"
         # Mender compatibility gate: the device_type the rig enrols as. The
         # gateway board enrols as `theia-gateway` so the gateway app artifact
         # (compatible-devices: [theia-gateway]) targets it and the central/compute
-        # role artifacts (theia-rig) don't. Registry-driven; defaults to theia-rig.
-        mender_device_type: "{{ _rig.mender_device_type | default('theia-rig') }}"
+        # role artifacts (theia-rig) don't. From -e (GS) / inventory; else theia-rig.
+        mender_device_type: "{{ mender_device_type | default('theia-rig') }}"
         # L4-B: the cross-board TIPC eth bearer device (e.g. eth0). Empty/unset →
         # single-board rig, no bearer (tipc-bearer.yml is a no-op).
-        tipc_bearer: "{{ _rig.tipc_bearer | default('') }}"
+        tipc_bearer: "{{ tipc_bearer | default('') }}"
         # etcd knobs (etcd.yml). etcd_external=true → don't install/start an etcd
         # (the host/runner already runs one, e.g. a host-network container rig); the
         # listen/advertise hosts template the shared-etcd URLs. Must be threaded
         # through add_host or the etcd task sees the default (false) and collides.
-        etcd_external: "{{ _rig.etcd_external | default((role | default('')) == 'zonal') }}"
-        etcd_listen_host: "{{ _rig.etcd_listen_host | default(etcd_listen_host | default('127.0.0.1')) }}"
-        etcd_advertise_host: "{{ _rig.etcd_advertise_host | default(etcd_advertise_host | default(ansible_host | default('127.0.0.1'))) }}"
+        etcd_external: "{{ etcd_external | default((role | default('')) == 'zonal') }}"
+        etcd_listen_host: "{{ etcd_listen_host | default('127.0.0.1') }}"
+        etcd_advertise_host: "{{ etcd_advertise_host | default(ansible_host | default('127.0.0.1')) }}"
         # Post-fetch S3 vars: the manifest cache + OTA asset paths the fetch task
         # repointed on localhost — thread them so the play host reads from S3.
         manifest_dir: "{{ manifest_dir }}"

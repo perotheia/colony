@@ -24,61 +24,33 @@
 #
 # Run:  theia orchestrate --target rpi4         (resolves registry/rpi4.yml)
 #   or:  ansible-playbook orchestrate.yml -e target=rpi4
-- name: "Resolve the deploy target from the registry"
+- name: "Resolve the deploy target (S3-EXCLUSIVE — no registry)"
   hosts: localhost
   gather_facts: false
   vars:
     target: "{{ target | mandatory }}"
-    registry_file: "{{ registry_dir }}/{{ target }}.yml"
   tasks:
-    # registry-free: _rig defaults to {} and every field coalesces from the
-    # -e vars (host/machine/role the GS deploy passes) + inventory constants
-    # (s3_endpoint/tipc_scope/etcd_*). A legacy registry file, when present, still
-    # wins via _rig.<field>.
-    - name: "Stat the registry file (present only on the legacy/CLI path)"
-      ansible.builtin.stat:
-        path: "{{ registry_dir }}/{{ target }}.yml"
-      register: _reg_stat
-      when: registry_dir is defined
-      delegate_to: localhost
-      become: false
-    # Load the registry entry into a DISTINCT var (_rig_file) — NOT _rig — because
-    # a later `set_fact _rig` would otherwise OUTRANK include_vars precedence and
-    # shadow the load (the bug that sent every target to SSH 127.0.0.1:22). We then
-    # set_fact _rig FROM _rig_file so the loaded entry wins (set_fact vs set_fact =
-    # last-wins). Registry-free (no file) → _rig stays {} and fields coalesce from
-    # -e vars + inventory constants.
-    - name: "Load the target's registry entry if one exists (legacy/CLI path)"
-      ansible.builtin.include_vars:
-        file: "{{ registry_dir }}/{{ target }}.yml"
-        name: _rig_file
-      when:
-        - registry_dir is defined
-        - _reg_stat.stat.exists | default(false)
-    - name: "Resolve _rig (loaded entry wins over the empty default via set_fact)"
+    # colony is S3-EXCLUSIVE: every field comes from the -e vars the GS passes
+    # (--host/ansible_host, role/machine, runtime_version, machine_instance) +
+    # inventory constants (s3_endpoint/tipc_scope/etcd_*). No registry, no
+    # legacy/CLI fallback. ansible_host is mandatory — the GS always provides it.
+    - name: "Require ansible_host (the GS provides it; no registry fallback)"
+      ansible.builtin.assert:
+        that:
+          - ansible_host is defined
+          - ansible_host | default('') | length > 0
+        fail_msg: >-
+          ansible_host is required (colony is S3-exclusive — no registry). The GS
+          passes --host <ip> per target; a bare CLI run must pass -e
+          ansible_host=<ip> -e role=master|zonal.
+    # Pull the per-machine manifest+config from the S3 runtime plane -> repoints
+    # manifest_dir at a controller-local cache (+ mender_artifacts_dir=<cache>/ota).
+    - name: "Resolve S3 vars for the manifest fetch"
       ansible.builtin.set_fact:
-        _rig: "{{ _rig_file | default({}) }}"
-    - name: "Fail fast if a registry_dir was passed but its entry is missing"
-      ansible.builtin.fail:
-        msg: >-
-          registry_dir={{ registry_dir }} was passed but
-          {{ registry_dir }}/{{ target }}.yml does not exist on the controller.
-          The legacy/CLI path needs it for ansible_host/ansible_connection —
-          without it the target falls back to SSH 127.0.0.1:22 (UNREACHABLE).
-          Check the path is mounted/readable on the controller, or use the
-          registry-free path (--host IP --role master|zonal).
-      when:
-        - registry_dir is defined
-        - not (_reg_stat.stat.exists | default(false))
-    # Pull the per-machine manifest+config from the S3 runtime plane (if the
-    # registry sets s3_endpoint + runtime_version) -> repoints manifest_dir at a
-    # controller-local cache. NO-OP when S3 isn't configured (local dist/ stands).
-    - name: "Resolve S3 vars from the registry for the manifest fetch"
-      ansible.builtin.set_fact:
-        s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
-        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default(s3_runtime_bucket | default('theia-runtime')) }}"
-        runtime_version: "{{ _rig.runtime_version | default(runtime_version | default('')) }}"
-        machine: "{{ _rig.machine | default(role | default(machine | default(''))) }}"
+        s3_endpoint: "{{ s3_endpoint | default('') }}"
+        s3_runtime_bucket: "{{ s3_runtime_bucket | default('theia-runtime') }}"
+        runtime_version: "{{ runtime_version | default('') }}"
+        machine: "{{ role | default(machine | default('')) }}"
     - name: "Fetch the deploy manifest from S3 (repoints manifest_dir)"
       ansible.builtin.include_tasks: tasks/fetch-manifest-s3.yml
 
@@ -86,33 +58,31 @@
       ansible.builtin.add_host:
         name: "{{ target }}"
         groups: _orchestrate_targets
-        ansible_host: "{{ _rig.ansible_host | default(ansible_host) }}"
-        ansible_user: "{{ _rig.ansible_user | default(ansible_user | default('root')) }}"
+        ansible_host: "{{ ansible_host }}"
+        ansible_user: "{{ ansible_user | default('root') }}"
         # Optional transport overrides (non-standard SSH port / non-SSH connection)
         # — see provision.yml. Default SSH:22.
-        ansible_port: "{{ _rig.ansible_port | default(ansible_port | default(omit)) }}"
-        ansible_connection: "{{ _rig.ansible_connection | default(omit) }}"
-        machine: "{{ _rig.machine | default(role | default(machine)) }}"
+        ansible_port: "{{ ansible_port | default(omit) }}"
+        ansible_connection: "{{ target_connection | default('ssh') }}"
+        machine: "{{ role | default(machine | default('')) }}"
         deploy_target: "{{ target }}"
         manifest_dir: "{{ manifest_dir }}"
         theia_run_src: "{{ theia_run_src | default('') }}"
         mender_artifacts_dir: "{{ mender_artifacts_dir | default('') }}"
         # S3 runtime plane — propagate so the orchestrate play picks the S3-pull
-        # path (install-runtime-s3.yml) instead of the local bundle. Empty/unset
-        # runtime_version falls back to the local dist/<rig>/<rig>.deb.
-        runtime_version: "{{ _rig.runtime_version | default(runtime_version | default('')) }}"
-        s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
-        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default(s3_runtime_bucket | default('theia-runtime')) }}"
-        deb_arch: "{{ _rig.deb_arch | default('amd64') }}"
+        # path (install-runtime-s3.yml). runtime_version is required (S3-exclusive).
+        runtime_version: "{{ runtime_version | default('') }}"
+        s3_endpoint: "{{ s3_endpoint | default('') }}"
+        s3_runtime_bucket: "{{ s3_runtime_bucket | default('theia-runtime') }}"
+        deb_arch: "{{ deb_arch | default('amd64') }}"
         # L4-B: TIPC publication scope. 'cluster' makes a board's node services
         # reachable across the eth TIPC bearer (multi-board: compute↔central).
-        # Default node-scope for single-board rigs (registry omits tipc_scope).
-        tipc_scope: "{{ _rig.tipc_scope | default(tipc_scope | default('')) }}"
+        tipc_scope: "{{ tipc_scope | default('') }}"
         # L4-C: per-machine TIPC instance index (central=0, compute=1, …). The
         # supervisor shifts each child node's --tipc instance by this, so the same
         # FC binary binds a distinct cluster address per board — V-UCM reaches a
         # SPECIFIC board's UCM via connect_instance(idx). Default 0 (single-board).
-        machine_instance: "{{ _rig.machine_instance | default(machine_instance | default('0')) }}"
+        machine_instance: "{{ machine_instance | default('0') }}"
 
 - name: "Theia orchestrate (Phase 2 — binaries + real config)"
   hosts: _orchestrate_targets

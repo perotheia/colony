@@ -76,32 +76,40 @@
   loop_control:
     label: "{{ item.path }}"
 
-# The theia-release update module + the Mender→UCM state scripts are ON-DEVICE
-# FIELD ARTIFACTS that ship in the runtime .deb (repo split: deploy/mender/ stays
-# in theia, lands via the runtime package in orchestrate Phase 2). They are NOT a
-# colony asset. For a controller that DOES have them locally (a dev box with the
-# theia checkout), set `mender_artifacts_dir` to deploy/mender/ to pre-push them;
-# otherwise this step is skipped and the runtime .deb is the source of truth.
-- name: "Discover an OPTIONAL local source for the Mender on-device artifacts"
+# The theia update modules (theia-swp/theia-app/theia-release) + the Mender→UCM
+# state scripts are on-device OTA assets colony installs at PROVISION time (the
+# 2-step model: provision = one-time board setup incl. the update modules;
+# orchestrate = per-deploy runtime install). They travel WITH the S3 runtime
+# manifest (theia release --s3 packs platform/runtime/ota/ into manifest.tar.gz →
+# fetch-manifest-s3.yml unpacks it and sets mender_artifacts_dir=<cache>/ota).
+# S3-EXCLUSIVE: this is REQUIRED, not optional — without the modules the Mender
+# client can't run a theia-swp/theia-release artifact (deploys hang pending).
+- name: "Assert the OTA modules were fetched from the S3 manifest"
   ansible.builtin.stat:
-    path: "{{ mender_artifacts_dir | default('') }}/modules/theia-release"
+    path: "{{ mender_artifacts_dir | default('') }}/modules/theia-swp"
   delegate_to: localhost
   become: false
   register: _mender_mod_src
-  when: mender_artifacts_dir is defined and mender_artifacts_dir | length > 0
+
+- name: "Fail if the S3 manifest carried no OTA modules"
+  ansible.builtin.fail:
+    msg: >-
+      mender_artifacts_dir={{ mender_artifacts_dir | default('(unset)') }} has no
+      modules/theia-swp. colony is S3-exclusive: the OTA modules ship in the S3
+      runtime manifest (theia release --s3 packs platform/runtime/ota/). Re-publish
+      the runtime plane so manifest.tar.gz contains ota/modules/.
+  when: not (_mender_mod_src.stat.exists | default(false))
 
 - name: "Ensure the custom update-module dir"
   ansible.builtin.file:
     path: /usr/share/mender/modules/v3
     state: directory
     mode: "0755"
-  when: _mender_mod_src.stat.exists | default(false)
 
-- name: "Pre-push the theia update modules (dev controller only; else from the .deb)"
-  # BOTH custom modules: theia-release (full release-dir swap, the role/runtime OTA)
-  # and theia-app (day-2 app overlay into the running release — `theia release-app`).
-  # An older runtime .deb may ship only theia-release; pushing both here makes the
-  # app-plane OTA work without rebuilding the runtime.
+- name: "Install the theia Mender update modules from the S3 OTA assets"
+  # theia-release (full release-dir swap — role/runtime OTA), theia-app (legacy day-2
+  # overlay), theia-swp (the SWP overlay + the runtime-dependency gate). All three so
+  # the app plane works right after provision, no runtime rebuild.
   ansible.builtin.copy:
     src: "{{ mender_artifacts_dir }}/modules/{{ item }}"
     dest: "/usr/share/mender/modules/v3/{{ item }}"
@@ -110,16 +118,14 @@
     - theia-release
     - theia-app
     - theia-swp
-  when: _mender_mod_src.stat.exists | default(false)
 
 - name: "Ensure the Mender scripts dir"
   ansible.builtin.file:
     path: /etc/mender/scripts
     state: directory
     mode: "0755"
-  when: _mender_mod_src.stat.exists | default(false)
 
-- name: "Pre-push the Mender→UCM state script + the UCM adopter (dev controller only)"
+- name: "Install the Mender→UCM state script + the UCM adopter from the S3 OTA assets"
   ansible.builtin.copy:
     src: "{{ mender_artifacts_dir }}/state-scripts/{{ item }}"
     dest: "/etc/mender/scripts/{{ item }}"
@@ -127,7 +133,6 @@
   loop:
     - ArtifactInstall_Leave_01_ucm-request   # the Mender hook
     - ucm-adopt.py                            # hands the landed release to UCM
-  when: _mender_mod_src.stat.exists | default(false)
 
 # Tailscale/VPN enrolment is its OWN flow (tools/rig-enroll over com gRPC) — not
 # here. This task only lands the OTA agent + the theia-release customization.
