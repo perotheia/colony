@@ -283,9 +283,12 @@ done
 ok "mender server joined the bridge ($TRAEFIK_IP)"
 # enroll (server reached by its bridge IP, not 127.0.0.1)
 for b in central compute; do
+  # KEEP stderr: enroll-rig.sh emits its reachability pre-check + the mender-authd
+  # journal dump on failure there — suppressing it (the old `>/dev/null 2>&1`)
+  # hid WHY enrol failed. Drop only the (verbose apt/install) stdout.
   ctl "RIG_EXEC=docker DEVICE_ID=$b SERVER_CA=/repo/ground-station/.srv-ca.crt \
        bash /repo/ground-station/mender/server/enroll-rig.sh ota-$b $TRAEFIK_IP docker.mender.io $MENDER_EMAIL $MENDER_PASS" \
-    >/dev/null 2>&1 || die "enroll $b"
+    >/dev/null || die "enroll $b"
 done
 ok "boards enrolled"
 # deploy the demo APP release (1.0) over Mender — this is the user-apps composer.
