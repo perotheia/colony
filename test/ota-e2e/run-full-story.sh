@@ -152,7 +152,7 @@ S3="http://$MINIO_IP:9000"          # host-side push target (boards use ota-mini
 # slices reference (executor.json per machine). This is the platform base.
 cd "$THEIA_DIR"
 PYTHONPATH="$THEIA_DIR/artheia:$THEIA_DIR" \
-  artheia serialize-manifest manifest.services.rig --attr MULTI \
+  artheia serialize-manifest manifest.services.rig \
   --out "$THEIA_DIR/dist/manifest" || die "rig MULTI serialize failed"
 # nm opts out of boot (would tear down the shared host iface).
 python3 - "$THEIA_DIR/dist/manifest/master/executor.json" <<'PY'
@@ -178,18 +178,25 @@ for b in central compute; do
   for i in $(seq 1 30); do ctl "ansible -i 'ota-$b,' ota-$b -c community.docker.docker -m ping" >/dev/null 2>&1 && break
     sleep 2; [ "$i" = 30 ] && die "docker-conn $b"; done; ok "controller → $b"
 done
-CENV="THEIA_WORKSPACE=/repo/theia COLONY_ANSIBLE=/repo/colony/ansible COLONY_REGISTRY=/repo/colony/test/ota-e2e/registry"
+# colony is S3-EXCLUSIVE (registry-free): drive it by --host + --role, exactly
+# as the Ground Station does. The docker test rigs use the docker connection, so
+# pass target_connection=community.docker.docker (not ansible_connection — the
+# playbook add_host reads target_connection). role: central=master, compute=zonal.
+CENV="THEIA_WORKSPACE=/repo/theia COLONY_ANSIBLE=/repo/colony/ansible"
 MAN="-e manifest_dir=/repo/theia/dist/manifest"
 RUN="-e theia_run_src=/repo/theia/platform/runtime/ota/theia-run.sh"
-# provision (Phase 1: dirs/etcd/mender client) THEN orchestrate (Phase 2: pull the
-# runtime+services FROM S3 via install-runtime-s3, stage releases/<ver> + current,
-# start the supervisor). This is the master/zonal PLATFORM base, all from S3.
-for b in central compute; do
-  log "provision $b (Phase 1)"
-  ctl "$CENV /repo/colony/bin/colony provision $b $MAN -e mender_artifacts_dir=/repo/theia/platform/runtime/ota" \
+DCONN="-e target_connection=community.docker.docker"
+S3E="-e s3_endpoint=http://ota-minio:9000 -e s3_runtime_bucket=theia-runtime -e runtime_version=$RTVER"
+# central=master (etcd here), compute=zonal (etcd_external). machine_instance
+# distinguishes the boards (master=0, zonal=1) on the shared docker host TIPC ns.
+for spec in "central master 0 false" "compute zonal 1 true"; do
+  set -- $spec; b=$1; role=$2; inst=$3; ext=$4
+  EV="$MAN $DCONN $S3E -e role=$role -e machine_instance=$inst -e etcd_external=$ext"
+  log "provision $b (Phase 1, role=$role)"
+  ctl "$CENV /repo/colony/bin/colony provision $b --host ota-$b --role $role $EV -e mender_artifacts_dir=/repo/theia/platform/runtime/ota" \
     || die "provision $b failed"
   log "orchestrate $b (install runtime+services FROM S3, start)"
-  ctl "$CENV /repo/colony/bin/colony orchestrate $b $MAN $RUN -e autostart=true" \
+  ctl "$CENV /repo/colony/bin/colony orchestrate $b --host ota-$b --role $role $EV $RUN -e autostart=true" \
     || die "orchestrate $b failed"
 done
 sleep 8
