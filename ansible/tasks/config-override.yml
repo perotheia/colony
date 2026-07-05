@@ -87,10 +87,17 @@
   # Only FCs that ACTUALLY have an override (machine or target) — pure-base FCs
   # were already pushed verbatim by seed-config.yml, so re-pushing them here
   # would just churn formatting and trip a needless supervisor reload.
+  #
+  # EXCLUDE executor.json: combine(recursive=True) REPLACES lists, and the
+  # supervisor tree's children[] is a list — a partial executor override (e.g.
+  # deploy/config/master/executor.json marking fw/tsync/rds run_on_start:false)
+  # would TRUNCATE the tree to just those entries. Executor overrides are a
+  # SERIALIZE-time concern (theia's _deep_merge does name-keyed list merge into
+  # the full tree); seed-config already pushed the correct executor.json.
   loop: >-
     {{ ((_machine_overrides.files | default([]) | map(attribute='path') | list)
         + (_target_overrides.files | default([]) | map(attribute='path') | list))
-       | map('basename') | unique | list }}
+       | map('basename') | reject('equalto', 'executor.json') | unique | list }}
   loop_control:
     label: "{{ deploy_target }}/{{ item | basename }}"
   notify: "reload supervisor"

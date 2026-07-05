@@ -154,11 +154,22 @@ cd "$THEIA_DIR"
 PYTHONPATH="$THEIA_DIR/artheia:$THEIA_DIR" \
   artheia serialize-manifest manifest.services.rig \
   --out "$THEIA_DIR/dist/manifest" || die "rig MULTI serialize failed"
-# nm opts out of boot (would tear down the shared host iface).
+# HW-gate the master executor IN THE SERIALIZED BASE (so the S3 manifest carries
+# the correct 14-FC tree with the right run_on_start flags). This is what
+# `theia manifest services` does via deploy/config/master/executor.json — but the
+# bare `artheia serialize-manifest` above doesn't apply that override, and colony's
+# on-device config-override merges executor.json with combine(recursive) where
+# LISTS REPLACE (it would truncate children[] to just the override's entries). So
+# set the flags here, on the FULL tree, instead:
+#   nm      — would tear down the shared docker host iface
+#   fw/tsync/rds — the HW-gated safe base (netfilter / PTP clock / RouDi shm); a
+#                  bare rig lacks them, so define-but-don't-boot (matches
+#                  deploy/config/master/executor.json).
 python3 - "$THEIA_DIR/dist/manifest/master/executor.json" <<'PY'
 import json,sys; p=sys.argv[1]; t=json.load(open(p))
+GATE={"nm","fw","tsync","rds"}
 def f(n):
-  if n.get("type")=="worker" and n.get("name")=="nm": n["run_on_start"]=False
+  if n.get("type")=="worker" and n.get("name") in GATE: n["run_on_start"]=False
   for c in n.get("children",[]): f(c)
 f(t); json.dump(t,open(p,"w"),indent=2)
 PY
@@ -186,12 +197,16 @@ CENV="THEIA_WORKSPACE=/repo/theia COLONY_ANSIBLE=/repo/colony/ansible"
 MAN="-e manifest_dir=/repo/theia/dist/manifest"
 RUN="-e theia_run_src=/repo/theia/platform/runtime/ota/theia-run.sh"
 DCONN="-e target_connection=community.docker.docker"
+# The docker test rigs only have root — the registry used to set ansible_user:root;
+# the inventory default is axadmin (a real rig's login), so pass root explicitly or
+# ansible connects as axadmin, whose $HOME doesn't exist → UNREACHABLE on ~/.ansible.
+DUSER="-e ansible_user=root"
 S3E="-e s3_endpoint=http://ota-minio:9000 -e s3_runtime_bucket=theia-runtime -e runtime_version=$RTVER"
 # central=master (etcd here), compute=zonal (etcd_external). machine_instance
 # distinguishes the boards (master=0, zonal=1) on the shared docker host TIPC ns.
 for spec in "central master 0 false" "compute zonal 1 true"; do
   set -- $spec; b=$1; role=$2; inst=$3; ext=$4
-  EV="$MAN $DCONN $S3E -e role=$role -e machine_instance=$inst -e etcd_external=$ext"
+  EV="$MAN $DCONN $DUSER $S3E -e role=$role -e machine_instance=$inst -e etcd_external=$ext"
   log "provision $b (Phase 1, role=$role)"
   ctl "$CENV /repo/colony/bin/colony provision $b --host ota-$b --role $role $EV -e mender_artifacts_dir=/repo/theia/platform/runtime/ota" \
     || die "provision $b failed"
@@ -223,16 +238,25 @@ cd "$DEMO_DIR"
 THEIA_WORKSPACE="$DEMO_DIR" THEIA_INVOCATION_CWD="$DEMO_DIR" theia manifest split --attr DOCKER \
   || die "demo manifest failed"
 THEIA_WORKSPACE="$DEMO_DIR" theia dist split --attr DOCKER || die "demo dist failed"
-ok "demo/dist built (central=services, compute=p1-p4+shwa)"
+ok "demo/dist built (master=services, zonal=p1-p4+shwa)"
 
 ###############################################################################
 log "STEP 7 — release user apps (manifest + config) → S3"
 ###############################################################################
 # pack the demo per-machine .deb trees as .mender (the app artifacts) AND publish
 # the app plane to MinIO (user-software/). The OTA deploy then pulls them.
-for role in central compute; do
-  DIST_ROOT="$DEMO_DIR/dist" "$HERE/helpers/deb-to-mender.sh" "$role" 1.0 \
-    "$DEMO_DIR/dist/manifest/$role/$role.deb" || die "pack $role app artifact"
+#
+# DEVICE ↔ MACHINE: the demo split rig is ROLE-KEYED (machines master/zonal), but
+# the DEVICES (containers/Mender identities) are named central/compute. The
+# artifact for device <dev> is packed from the <machine> dist slice and NAMED by
+# the device (so group-and-deploy targets it by device identity). Map:
+#   central ← master   |   compute ← zonal
+# (deb-to-mender's first arg is the artifact-name label; the deb path selects the
+# machine slice.)
+for pair in "central master" "compute zonal"; do
+  set -- $pair; dev=$1; m=$2
+  DIST_ROOT="$DEMO_DIR/dist" "$HERE/helpers/deb-to-mender.sh" "$dev" 1.0 \
+    "$DEMO_DIR/dist/manifest/$m/$m.deb" || die "pack $dev app artifact (machine=$m)"
 done
 # publish the app artifacts to S3 (the app plane).
 bash "$HERE/helpers/push-runtime-s3.sh" "apps-1.0" "$S3" \
@@ -275,15 +299,17 @@ for b in central compute; do
     [ "$i" = 30 ] && die "$b never flipped to the app release ($cur)"
   done
 done
-# The OTA delivered the demo-app BINARIES (current → <m>-1.0) but the supervisor
+# The OTA delivered the demo-app BINARIES (current → <dev>-1.0) but the supervisor
 # reads /opt/theia/config/executor.json (a FIXED path, not in the release). Push the
 # DEMO supervision tree there — this is "orchestrate from demo/manifest" (the config
-# half): the user's executor.json defines which apps run (compute: p1-p4; central:
+# half): the user's executor.json defines which apps run (zonal: p1-p4; master:
 # the services). Then the supervisor runs the OTA binaries under the demo tree.
+# DEVICE ↔ MACHINE: central ← master, compute ← zonal (the role-keyed rig).
 log "push the demo supervision tree (executor.json) — orchestrate config half"
-for b in central compute; do
-  docker cp "$DEMO_DIR/dist/manifest/$b/executor.json" "ota-$b:/opt/theia/config/executor.json"
-  docker exec "ota-$b" sh -c 'systemctl restart theia-supervisor' 2>/dev/null || true
+for pair in "central master" "compute zonal"; do
+  set -- $pair; dev=$1; m=$2
+  docker cp "$DEMO_DIR/dist/manifest/$m/executor.json" "ota-$dev:/opt/theia/config/executor.json"
+  docker exec "ota-$dev" sh -c 'systemctl restart theia-supervisor' 2>/dev/null || true
 done
 sleep 12
 [ "$(bfc compute)" -ge 4 ] || die "compute not running the demo apps ($(bfc compute) FCs: $(fcs compute))"
