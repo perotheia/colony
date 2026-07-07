@@ -11,6 +11,12 @@ set -euo pipefail
 MACHINE="${1:?machine}"; VER="${2:?ver}"; DEB="${3:?deb path}"
 DIST_ROOT="${DIST_ROOT:-$(cd "$(dirname "$0")/../../../../theia/demo/dist" && pwd)}"
 MA="$(command -v mender-artifact-wrap || command -v mender-artifact)"
+# Optional SWP signing key (app-plane authenticity). When $THEIA_SWP_SIGN_KEY
+# points at a private key, sign the artifact so a rig with ArtifactVerifyKey
+# ACCEPTS it (and REFUSES an unsigned/forged one). Empty = unsigned (dev).
+SIGN_KEY="${THEIA_SWP_SIGN_KEY:-}"
+SIGN_ARGS=()
+if [ -n "$SIGN_KEY" ] && [ -f "$SIGN_KEY" ]; then SIGN_ARGS=(--key "$SIGN_KEY"); fi
 [ -f "$DEB" ] || { echo "no deb: $DEB" >&2; exit 1; }
 mkdir -p "$DIST_ROOT/roles"
 OUT="$DIST_ROOT/roles/${MACHINE}-${VER}.mender"
@@ -28,5 +34,10 @@ tar -C "$WORK/root/opt/theia" -czf "$WORK/release.tar.gz" .
 "$MA" write module-image \
   --type theia-release --artifact-name "${MACHINE}-${VER}" --device-type theia-rig \
   --file "$WORK/release.tar.gz" --file "$WORK/version.txt" \
+  "${SIGN_ARGS[@]}" \
   --output-path "$OUT" >/dev/null
-echo "[deb-to-mender] $OUT ($(du -h "$OUT" | cut -f1))"
+if [ ${#SIGN_ARGS[@]} -gt 0 ]; then
+  echo "[deb-to-mender] $OUT ($(du -h "$OUT" | cut -f1)) SIGNED"
+else
+  echo "[deb-to-mender] $OUT ($(du -h "$OUT" | cut -f1)) unsigned"
+fi

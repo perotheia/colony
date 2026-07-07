@@ -136,3 +136,38 @@
 
 # Tailscale/VPN enrolment is its OWN flow (tools/rig-enroll over com gRPC) — not
 # here. This task only lands the OTA agent + the theia-release customization.
+
+# ── SWP artifact-verify key (app-plane authenticity) ─────────────────────────
+# Pull the PUBLIC verify key from the S3 provisioning plane and point mender.conf
+# at it, so mender-update REFUSES any SWP not signed by the operator's private
+# key (`theia release-swp` signs; `theia cert copy` uploaded this public half).
+# Fail-CLOSED: with the key present, unsigned/forged artifacts are rejected
+# UPSTREAM of the theia-swp module. The key is NEVER baked into the image or
+# committed — the operator regenerates the pair per deployment (`theia cert
+# generate`). NO-OP without an S3 endpoint (a local/dev provision).
+- name: "SWP verify key: S3 provisioning plane configured?"
+  ansible.builtin.set_fact:
+    _swp_verify_key: "{{ (s3_endpoint | default('') | length) > 0 }}"
+
+- name: "SWP verify key: pull the PUBLIC key from S3 → /etc/mender"
+  ansible.builtin.get_url:
+    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/artifact-verify-key.pem"
+    dest: /etc/mender/artifact-verify-key.pem
+    mode: "0644"
+    force: true            # always refresh — a rotated key must land
+  when: _swp_verify_key | bool
+
+- name: "SWP verify key: ensure mender.conf sets ArtifactVerifyKey"
+  ansible.builtin.lineinfile:
+    path: /etc/mender/mender.conf
+    regexp: '"ArtifactVerifyKey"'
+    line: '  "ArtifactVerifyKey": "/etc/mender/artifact-verify-key.pem",'
+    insertafter: '"ServerURL"'
+  when: _swp_verify_key | bool
+
+- name: "SWP verify key: report"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'ArtifactVerifyKey installed — this rig REFUSES unsigned/forged SWPs'
+         if _swp_verify_key | bool
+         else 'no S3 endpoint — verify key NOT installed (dev provision)' }}

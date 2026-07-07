@@ -52,7 +52,8 @@ ok()  { printf '\033[1;32m  ✓ %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m  ✗ %s\033[0m\n' "$*" >&2; dump; exit 1; }
 dump(){ mkdir -p "$HERE/logs"; for c in ota-central ota-compute ota-controller; do
   docker exec "$c" journalctl --no-pager >"$HERE/logs/$c.journal" 2>&1 || true; done; }
-cleanup(){ [ "$KEEP" = 1 ] && { log "--keep"; return; }; log "teardown"
+cleanup(){ [ -n "${SIGNDIR:-}" ] && rm -rf "$SIGNDIR" 2>/dev/null||true
+  [ "$KEEP" = 1 ] && { log "--keep"; return; }; log "teardown"
   $COMPOSE down -v --remove-orphans 2>/dev/null||true; docker rm -f ota-etcd 2>/dev/null||true
   ( cd "$SERVER_DIR" 2>/dev/null && docker compose down 2>/dev/null )||true; }
 trap cleanup EXIT
@@ -176,6 +177,23 @@ PY
 
 bash "$HERE/helpers/push-runtime-s3.sh" "$RTVER" "$S3" "$RT_DEB" "$SV_DEB" || die "runtime → S3 push failed"
 ok "runtime+services published to s3://theia-runtime/$RTVER/ (bridge MinIO $MINIO_IP)"
+
+###############################################################################
+log "STEP 3.5 — generate the SWP signing key + ship the PUBLIC key to S3"
+###############################################################################
+# App-plane authenticity: generate an EPHEMERAL keypair (nothing persisted),
+# upload ONLY the public verify key to the S3 provisioning plane (colony's
+# install-mender.yml pulls it onto each rig → mender.conf ArtifactVerifyKey), and
+# export THEIA_SWP_SIGN_KEY so deb-to-mender.sh SIGNS the artifacts. The rig then
+# ACCEPTS the signed release and REFUSES any unsigned/forged one.
+SIGNDIR="$(mktemp -d)"   # cleaned by cleanup() on EXIT (the nightly's own trap)
+THEIA_SIGNING_DIR="$SIGNDIR" theia cert generate >/dev/null 2>&1 \
+  || die "cert generate failed"
+THEIA_SIGNING_DIR="$SIGNDIR" theia cert copy --s3 "$S3" --bucket theia-runtime \
+  || die "cert copy (verify key → S3) failed"
+export THEIA_SWP_SIGN_KEY="$SIGNDIR/theia-swp-signing.key"
+[ -f "$THEIA_SWP_SIGN_KEY" ] || die "signing key missing after generate"
+ok "SWP signing key generated (ephemeral); PUBLIC verify key → s3://theia-runtime/provisioning/"
 
 ###############################################################################
 log "STEP 4 — provision master+zonal FROM S3 (master=singletons, zonal=ucm+shwa)"
