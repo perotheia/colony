@@ -157,13 +157,27 @@
     force: true            # always refresh — a rotated key must land
   when: _swp_verify_key | bool
 
-- name: "SWP verify key: ensure mender.conf sets ArtifactVerifyKey"
+# mender.conf is written LATER by enroll-rig.sh (it `cat >`s the whole file, so
+# it carries ArtifactVerifyKey itself — see ground-station/mender/server/
+# enroll-rig.sh). At provision time the file may not exist yet, so only patch it
+# when present (a rig whose conf is baked/pre-written); never CREATE a partial
+# conf here. The key file above is what matters; the setting rides in via
+# enroll-rig or a baked image conf.
+- name: "SWP verify key: mender.conf present?"
+  ansible.builtin.stat:
+    path: /etc/mender/mender.conf
+  register: _mender_conf
+  when: _swp_verify_key | bool
+
+- name: "SWP verify key: ensure mender.conf sets ArtifactVerifyKey (if conf exists)"
   ansible.builtin.lineinfile:
     path: /etc/mender/mender.conf
     regexp: '"ArtifactVerifyKey"'
     line: '  "ArtifactVerifyKey": "/etc/mender/artifact-verify-key.pem",'
     insertafter: '"ServerURL"'
-  when: _swp_verify_key | bool
+  when:
+    - _swp_verify_key | bool
+    - _mender_conf.stat.exists | default(false)
 
 - name: "SWP verify key: report"
   ansible.builtin.debug:
