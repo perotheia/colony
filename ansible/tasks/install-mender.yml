@@ -149,12 +149,37 @@
   ansible.builtin.set_fact:
     _swp_verify_key: "{{ (s3_endpoint | default('') | length) > 0 }}"
 
-- name: "SWP verify key: pull the PUBLIC key from S3 → /etc/mender"
+# PER-DEVICE key first (the opt-in override the GS pins via the Fleet UI and
+# mirrors to provisioning/by-name/<name>.pem), then the FLEET key. `target` is the
+# device/machine name colony provisions (== the GS device name). A 404 on the
+# per-device key is expected (most rigs use the fleet key) — status_code tolerates
+# it so we fall through.
+- name: "SWP verify key: try this rig's PER-DEVICE key (by name)"
+  ansible.builtin.get_url:
+    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/by-name/{{ target }}.pem"
+    dest: /etc/mender/artifact-verify-key.pem
+    mode: "0644"
+    force: true
+  register: _per_device_key
+  failed_when: false        # 404 = no per-device override; fall back below
+  when: _swp_verify_key | bool
+
+- name: "SWP verify key: fall back to the FLEET key when no per-device key"
   ansible.builtin.get_url:
     url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/artifact-verify-key.pem"
     dest: /etc/mender/artifact-verify-key.pem
     mode: "0644"
     force: true            # always refresh — a rotated key must land
+  when:
+    - _swp_verify_key | bool
+    - (_per_device_key.status_code | default(0)) != 200
+
+- name: "SWP verify key: which key landed?"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'PER-DEVICE verify key (by-name/' ~ target ~ '.pem)'
+         if (_per_device_key.status_code | default(0)) == 200
+         else 'FLEET verify key (provisioning/artifact-verify-key.pem)' }}
   when: _swp_verify_key | bool
 
 # mender.conf is written LATER by enroll-rig.sh (it `cat >`s the whole file, so
