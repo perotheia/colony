@@ -342,6 +342,35 @@ sleep 12
 ok "composer: central=$(bfc central) FCs [$(fcs central)] compute=$(bfc compute) FCs [$(fcs compute)]"
 
 ###############################################################################
+log "STEP 8.5 — SIGNED PATCH rollout (1.0 → 1.0.1) — proves signing gates the OTA"
+###############################################################################
+# Re-pack the SAME app tree as a PATCH (1.0.1), SIGNED with the same ephemeral key
+# ($THEIA_SWP_SIGN_KEY, exported in STEP 3.5), and deploy it. The rigs provisioned
+# with ArtifactVerifyKey MUST accept it (correct signature) and flip current →
+# <dev>-1.0.1. This is the end-to-end proof that (a) signing applies to a patch
+# rollout, and (b) the verify key installed at provision actually gates the OTA.
+for pair in "central master" "compute zonal"; do
+  set -- $pair; dev=$1; m=$2
+  DIST_ROOT="$DEMO_DIR/dist" "$HERE/helpers/deb-to-mender.sh" "$dev" 1.0.1 \
+    "$DEMO_DIR/dist/manifest/$m/$m.deb" || die "pack $dev PATCH artifact (machine=$m)"
+  # assert the patch .mender is SIGNED (deb-to-mender prints SIGNED when the key is set)
+done
+bash "$HERE/helpers/push-runtime-s3.sh" "apps-1.0.1" "$S3" \
+  "$DEMO_DIR/dist/roles/central-1.0.1.mender" "$DEMO_DIR/dist/roles/compute-1.0.1.mender" \
+  >/dev/null 2>&1 || true
+ctl "$CHERE/helpers/group-and-deploy.sh $TRAEFIK_IP $MENDER_EMAIL $MENDER_PASS central-1.0.1 compute-1.0.1" \
+  || die "PATCH app deploy failed"
+for b in central compute; do
+  for i in $(seq 1 30); do
+    cur="$(docker exec ota-$b readlink /opt/theia/current 2>/dev/null||echo NONE)"
+    case "$cur" in *"$b-1.0.1"*) ok "$b accepted the SIGNED PATCH → $cur"; break;; esac
+    docker exec "ota-$b" sh -c 'kill -USR1 $(pgrep -x mender-update) 2>/dev/null'||true; sleep 4
+    [ "$i" = 30 ] && die "$b did NOT flip to the signed patch ($cur) — signing/verify-key broke the rollout"
+  done
+done
+ok "SIGNED PATCH rollout landed on both rigs (verify key gated + accepted the patch)"
+
+###############################################################################
 log "STEP 9 — RF audit/consistency over the composer's TIPC"
 ###############################################################################
 "$HERE/helpers/rf-audit.sh" || die "RF audit/consistency failed"
