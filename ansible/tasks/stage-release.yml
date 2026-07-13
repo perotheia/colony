@@ -21,7 +21,11 @@
 #                    runtime_version then 'local' for direct callers.
 - name: "Resolve the release version"
   ansible.builtin.set_fact:
-    _relver: "{{ release_version | default(runtime_version | default('local', true), true) }}"
+    # two-plane OTA (docs/design/two-plane-ota.md): the RUNTIME is itself a release
+    # dir (releases/runtime-<ver>), so current always points INTO releases/ — never
+    # at `.` (which self-loops on -L walks + breaks previous/rollback). SWP flips
+    # then move current between real release dirs.
+    _relver: "runtime-{{ release_version | default(runtime_version | default('local', true), true) }}"
 
 - name: "Release dir for {{ _relver }}"
   ansible.builtin.file:
@@ -31,6 +35,7 @@
   loop:
     - bin
     - lib
+    - config
 
 - name: "Enumerate the child binaries flat-installed by the services .deb"
   # Everything in bin/ EXCEPT the supervisor (the updater stays flat). The

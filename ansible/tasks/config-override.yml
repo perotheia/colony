@@ -82,7 +82,7 @@
           | dict2items | rejectattr('key', 'match', '^_comment') | items2dict)
         | to_nice_json
       }}
-    dest: "{{ theia_root }}/config/{{ item | basename }}"
+    dest: "{{ theia_root }}/current/config/{{ item | basename }}"
     mode: "0644"
   # Only FCs that ACTUALLY have an override (machine or target) — pure-base FCs
   # were already pushed verbatim by seed-config.yml, so re-pushing them here

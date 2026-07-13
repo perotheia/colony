@@ -1,0 +1,11 @@
+# Override for run-migration-e2e.sh — mounts the run's scaffolded consuming
+# workspace into the controller at /repo/ws (colony's manifest_dir + the
+# fleet deploy read it there). WS_MOUNT is exported by the driver script.
+services:
+  controller:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${COLONY_DIR:-../..}:/repo/colony:rw
+      - ${THEIA_DIR:-../../../theia}:/repo/theia:rw
+      - ${GROUND_STATION_DIR:-../../../ground-station}:/repo/ground-station:rw
+      - ${WS_MOUNT:?export WS_MOUNT}:/repo/ws:rw
