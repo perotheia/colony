@@ -64,6 +64,9 @@
         # — see provision.yml. Default SSH:22.
         ansible_port: "{{ ansible_port | default(omit) }}"
         ansible_connection: "{{ target_connection | default('ssh') }}"
+        # Per-rig TIPC netid (cluster isolation) — supervisor unit env; theia-run
+        # sets it before the first bind.
+        tipc_netid: "{{ tipc_netid | default('') }}"
         machine: "{{ role | default(machine | default('')) }}"
         deploy_target: "{{ target }}"
         manifest_dir: "{{ manifest_dir }}"
@@ -129,6 +132,13 @@
     - name: "Install runtime+services from the local bundle (.deb → /opt/theia/bin)"
       ansible.builtin.include_tasks: tasks/install-bundle.yml
       when: runtime_version is not defined or runtime_version | length == 0
+
+    # Re-install the OTA update modules from the S3 manifest on EVERY orchestrate
+    # (not only at provision) — so an updated theia-swp/theia-release module reaches
+    # an already-provisioned board on the next deploy. mender_artifacts_dir is set
+    # by fetch-manifest-s3.yml above. Idempotent + cheap.
+    - name: "Include OTA update-module (re)install"
+      ansible.builtin.include_tasks: tasks/install-ota-modules.yml
 
     # Lay the OTA-correct release-dir layout (releases/<ver>/bin + current symlink)
     # the strict supervisor requires (theia-run.sh REFUSES to start without

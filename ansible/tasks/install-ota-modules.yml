@@ -1,0 +1,38 @@
+# install-ota-modules.yml — install the theia Mender update modules from the S3
+# OTA assets. Included by BOTH provision (one-time) AND orchestrate (per-deploy),
+# so an UPDATED module (re-published in the runtime plane's manifest.tar.gz)
+# reaches an already-provisioned board on the next deploy — not only on a fresh
+# provision. Idempotent (copy is a no-op when unchanged); cheap (three small
+# scripts). mender_artifacts_dir is set by fetch-manifest-s3.yml (run first in
+# both flows).
+- name: "OTA modules: assert they were fetched from the S3 manifest"
+  ansible.builtin.stat:
+    path: "{{ mender_artifacts_dir | default('') }}/modules/theia-swp"
+  delegate_to: localhost
+  become: false
+  register: _ota_mod_src
+
+- name: "OTA modules: fail if the S3 manifest carried none"
+  ansible.builtin.fail:
+    msg: >-
+      mender_artifacts_dir={{ mender_artifacts_dir | default('(unset)') }} has no
+      modules/theia-swp. colony is S3-exclusive: the OTA modules ship in the S3
+      runtime manifest (theia release --s3 packs platform/runtime/ota/). Re-publish
+      the runtime plane so manifest.tar.gz contains ota/modules/.
+  when: not (_ota_mod_src.stat.exists | default(false))
+
+- name: "OTA modules: ensure the custom update-module dir"
+  ansible.builtin.file:
+    path: /usr/share/mender/modules/v3
+    state: directory
+    mode: "0755"
+
+- name: "OTA modules: install theia-{release,app,swp} from the S3 OTA assets"
+  ansible.builtin.copy:
+    src: "{{ mender_artifacts_dir }}/modules/{{ item }}"
+    dest: "/usr/share/mender/modules/v3/{{ item }}"
+    mode: "0755"
+  loop:
+    - theia-release
+    - theia-app
+    - theia-swp

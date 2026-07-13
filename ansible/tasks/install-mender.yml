@@ -84,40 +84,11 @@
 # fetch-manifest-s3.yml unpacks it and sets mender_artifacts_dir=<cache>/ota).
 # S3-EXCLUSIVE: this is REQUIRED, not optional — without the modules the Mender
 # client can't run a theia-swp/theia-release artifact (deploys hang pending).
-- name: "Assert the OTA modules were fetched from the S3 manifest"
-  ansible.builtin.stat:
-    path: "{{ mender_artifacts_dir | default('') }}/modules/theia-swp"
-  delegate_to: localhost
-  become: false
-  register: _mender_mod_src
-
-- name: "Fail if the S3 manifest carried no OTA modules"
-  ansible.builtin.fail:
-    msg: >-
-      mender_artifacts_dir={{ mender_artifacts_dir | default('(unset)') }} has no
-      modules/theia-swp. colony is S3-exclusive: the OTA modules ship in the S3
-      runtime manifest (theia release --s3 packs platform/runtime/ota/). Re-publish
-      the runtime plane so manifest.tar.gz contains ota/modules/.
-  when: not (_mender_mod_src.stat.exists | default(false))
-
-- name: "Ensure the custom update-module dir"
-  ansible.builtin.file:
-    path: /usr/share/mender/modules/v3
-    state: directory
-    mode: "0755"
-
-- name: "Install the theia Mender update modules from the S3 OTA assets"
-  # theia-release (full release-dir swap — role/runtime OTA), theia-app (legacy day-2
-  # overlay), theia-swp (the SWP overlay + the runtime-dependency gate). All three so
-  # the app plane works right after provision, no runtime rebuild.
-  ansible.builtin.copy:
-    src: "{{ mender_artifacts_dir }}/modules/{{ item }}"
-    dest: "/usr/share/mender/modules/v3/{{ item }}"
-    mode: "0755"
-  loop:
-    - theia-release
-    - theia-app
-    - theia-swp
+# The OTA update modules (theia-release/theia-app/theia-swp) install via the
+# SHARED task, so provision + orchestrate stay in lockstep (orchestrate re-installs
+# them too, so an updated module reaches a deployed board — see install-ota-modules.yml).
+- name: "Install the theia Mender update modules (shared task)"
+  ansible.builtin.include_tasks: install-ota-modules.yml
 
 - name: "Ensure the Mender scripts dir"
   ansible.builtin.file:
