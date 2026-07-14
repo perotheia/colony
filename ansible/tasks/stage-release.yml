@@ -1,75 +1,45 @@
-# stage-release.yml — lay the OTA-CORRECT release-dir layout the strict (G1)
-# supervisor requires, from the flat-installed runtime/services .debs.
+# stage-release.yml — lay the two-plane OTA runtime layout WITHOUT relocating any
+# binaries. The RUNTIME release is an ANCHORED SYMLINK back to $THEIA_ROOT:
 #
-#   /opt/theia/bin/supervisor        the UPDATER (runtime deb) — fixed, NEVER swapped
-#   /opt/theia/releases/<ver>/bin/   the SERVICES + APPS (the OTA-swappable set)
-#   /opt/theia/releases/<ver>/lib/   release libs (empty today — services static-
-#                                    link / use system .so's; here for OTA parity)
-#   /opt/theia/current -> releases/<ver>   the symlink the supervisor forks children from
+#   /opt/theia/{bin,config,lib}                the flat deb layout — NOT moved
+#   /opt/theia/releases/runtime-<ver> -> ..    (anchored: points at /opt/theia)
+#   /opt/theia/current -> releases/runtime-<ver>
 #
-# theia-run.sh + the supervisor REFUSE to start without `current` (no flat-bin
-# fallback), and a Mender/UCM OTA flips current -> releases/<new> + restarts the
-# FCs. The .debs install flat to /opt/theia/bin; this task RELOCATES the child
-# binaries (everything except the supervisor) into releases/<ver>/bin and points
-# current at it. Idempotent: re-running re-syncs the release dir + re-flips current.
+# So current/{bin,config,lib} resolve to the flat runtime dirs (the STOCK launcher
+# reads current/config/executor.json = the flat runtime config), and an SWP flip
+# moves `current` to a REAL release dir (releases/<swp>-<ver>) with its own config.
 #
-# Vars:
-#   release_version  the <ver> for the release dir. The orchestrate play passes the
-#                    pinned runtime_version (S3 path) or 'local' (local-bundle path).
-#                    A DISTINCT name from runtime_version so the caller can derive it
-#                    without a self-referential (recursive) template. Falls back to
-#                    runtime_version then 'local' for direct callers.
+# Why anchored (not current -> .): `current` points at a NAMED release symlink, so
+# `previous`/rollback save a real name (not `.`) and release_version reads
+# runtime-<ver>. (`find -L current` reports a benign, DETECTED-and-skipped loop —
+# the runtime-<ver> -> .. self-reference; GNU find/cp/rsync/tar handle it, no hang.
+# The OTA path resolves child bins via readlink -f, which is loop-clean.)
+#
+# Vars: release_version — the pinned runtime_version (S3) or 'local'. A DISTINCT
+# name so the caller derives it without a self-referential template.
 - name: "Resolve the release version"
   ansible.builtin.set_fact:
-    # two-plane OTA (docs/design/two-plane-ota.md): the RUNTIME is itself a release
-    # dir (releases/runtime-<ver>), so current always points INTO releases/ — never
-    # at `.` (which self-loops on -L walks + breaks previous/rollback). SWP flips
-    # then move current between real release dirs.
     _relver: "runtime-{{ release_version | default(runtime_version | default('local', true), true) }}"
 
-- name: "Release dir for {{ _relver }}"
+- name: "Ensure the releases/ dir"
   ansible.builtin.file:
-    path: "{{ theia_root }}/releases/{{ _relver }}/{{ item }}"
+    path: "{{ theia_root }}/releases"
     state: directory
     mode: "0755"
-  loop:
-    - bin
-    - lib
-    - config
 
-- name: "Enumerate the child binaries flat-installed by the services .deb"
-  # Everything in bin/ EXCEPT the supervisor (the updater stays flat). The
-  # services .deb owns exactly the FC binaries; the runtime .deb owns supervisor.
-  ansible.builtin.find:
-    paths: "{{ theia_root }}/bin"
-    file_type: file
-    excludes: "supervisor,theia-run"
-  register: _children
+# releases/runtime-<ver> -> .. (anchored: the symlink lives in releases/, so '..'
+# is $THEIA_ROOT). Absolute target avoids any ambiguity.
+- name: "Anchor releases/{{ _relver }} -> {{ theia_root }} (the runtime IS the flat tree)"
+  ansible.builtin.file:
+    src: "{{ theia_root }}"
+    dest: "{{ theia_root }}/releases/{{ _relver }}"
+    state: link
+    force: true
 
-- name: "Relocate the child binaries into releases/{{ _relver }}/bin"
-  ansible.builtin.copy:
-    src: "{{ item.path }}"
-    dest: "{{ theia_root }}/releases/{{ _relver }}/bin/{{ item.path | basename }}"
-    mode: "0755"
-    remote_src: true
-  loop: "{{ _children.files }}"
-  loop_control:
-    label: "{{ item.path | basename }}"
-
-- name: "Point current -> releases/{{ _relver }} (the OTA release symlink)"
+- name: "Point current -> releases/{{ _relver }}"
   ansible.builtin.file:
     src: "releases/{{ _relver }}"
     dest: "{{ theia_root }}/current"
     state: link
     force: true
   notify: "reload supervisor"
-
-- name: "Drop the now-redundant flat child binaries (supervisor reads current/bin)"
-  # Keep bin/supervisor (the updater); the FC copies now live under current/bin,
-  # so the flat duplicates only waste space and could drift. Idempotent.
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: absent
-  loop: "{{ _children.files }}"
-  loop_control:
-    label: "{{ item.path | basename }}"
