@@ -1,0 +1,32 @@
+# chown-theia.yml — hand /opt/theia to the unprivileged `theia` service user.
+#
+# The theia-runtime/theia-services deb postinst already creates the theia:theia
+# system user + chowns /opt/theia at install (install-bundle.yml). But LATER
+# tasks in orchestrate.yml write into /opt/theia as ROOT — seed-config.yml and
+# config-override.yml drop per-FC JSON under /opt/theia/config AFTER the postinst
+# ran. Those files land root-owned; the non-root supervisor must READ them and
+# WRITE its device-state (config/machine_instance, config/tipc_netid) alongside.
+# So re-assert ownership here, as the FINAL step before the unit starts.
+#
+# No-op-safe: if the deb didn't create the user (older runtime plane), create it
+# so the unit's User=theia resolves. Idempotent.
+- name: "Ensure the theia service group exists"
+  ansible.builtin.group:
+    name: theia
+    system: true
+
+- name: "Ensure the theia service user exists (system, no login)"
+  ansible.builtin.user:
+    name: theia
+    group: theia
+    system: true
+    create_home: false
+    home: "{{ theia_root | default('/opt/theia') }}"
+    shell: /usr/sbin/nologin
+
+- name: "chown -R theia:theia {{ theia_root | default('/opt/theia') }}"
+  ansible.builtin.file:
+    path: "{{ theia_root | default('/opt/theia') }}"
+    owner: theia
+    group: theia
+    recurse: true

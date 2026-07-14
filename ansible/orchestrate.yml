@@ -165,6 +165,13 @@
     - name: "Include per-target config override pass"
       ansible.builtin.include_tasks: tasks/config-override.yml
 
+    # Non-root supervisor: seed-config + config-override wrote /opt/theia/config
+    # as ROOT, after the deb postinst chowned the tree. Re-assert theia ownership
+    # so the unprivileged supervisor (unit User=theia) can read that config AND
+    # write its device-state alongside it. MUST run before the unit starts.
+    - name: "Include theia ownership assertion (non-root supervisor)"
+      ansible.builtin.include_tasks: tasks/chown-theia.yml
+
     # Boot-time autostart unit. ON by default so a fresh orchestrate (or one
     # after `theia cleanup`, which removes the unit) leaves a RUNNING, enabled
     # supervisor — not just staged files. The handler-based `tdb reload` only

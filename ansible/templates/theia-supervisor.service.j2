@@ -24,6 +24,12 @@ Environment=THEIA_MACHINE={{ machine }}
 # (central=0, compute=1, …) so the same FC binary binds a per-board cluster
 # address. V-UCM reaches a specific board's UCM via connect_instance(idx).
 Environment=THEIA_MACHINE_INSTANCE={{ machine_instance | default('0') }}
+{% if tipc_netid | default('') | string | length > 0 %}
+# Per-rig TIPC cluster isolation: theia-run sets the namespace netid before the
+# supervisor binds (a test/e2e rig picks a non-default id so a dev stack on the
+# same wire/host namespace cannot cross-talk).
+Environment=THEIA_TIPC_NETID={{ tipc_netid }}
+{% endif %}
 {% if tipc_scope | default('') == 'cluster' %}
 # L4-B multi-board: publish node services at TIPC CLUSTER scope so a remote
 # board's nodes are reachable over the eth TIPC bearer (the compute board's UCM
@@ -34,14 +40,23 @@ Environment=THEIA_TIPC_SCOPE=cluster
 # theia-run.sh: require current, set THEIA_SUPERVISOR_MANIFEST + LD_LIBRARY_PATH=
 # $THEIA_ROOT_DIR/current/lib, then exec /opt/theia/bin/supervisor.
 ExecStart=/opt/theia/bin/theia-run
+# Run UNPRIVILEGED. The supervisor is NOT root: its two caps come from FILE
+# capabilities on /opt/theia/bin/supervisor (setcap +eip, theia-runtime
+# postinst), which the kernel honors on exec for any user. The theia user
+# owns /opt/theia (postinst chown) so the launcher can write device-state
+# (config/machine_instance, config/tipc_netid). Dropping root also frees any
+# host resource the old root supervisor squatted (e.g. a listener socket).
+User=theia
+Group=theia
 # Bounded restart: a crash re-execs, but a crash-loop backs off rather than
 # hammering (matches run-supervisor.sh's own bounded re-exec intent).
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=60
 StartLimitBurst=5
-# The supervisor needs the caps setcap already applied to the binary; systemd
-# does not strip file caps for Type=simple, so AmbientCapabilities is not needed.
+# Caps come from FILE capabilities on the binary (setcap +eip). systemd does
+# not strip file caps for Type=simple, and file caps apply to the non-root
+# User= above — so no AmbientCapabilities and no root are needed.
 
 [Install]
 WantedBy=multi-user.target
