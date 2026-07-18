@@ -25,8 +25,12 @@
     shell: /usr/sbin/nologin
 
 - name: "chown -R theia:theia {{ theia_root | default('/opt/theia') }}"
-  ansible.builtin.file:
-    path: "{{ theia_root | default('/opt/theia') }}"
-    owner: theia
-    group: theia
-    recurse: true
+  # Use GNU `chown -R` (shell), NOT ansible.builtin.file recurse:true. The
+  # release layout has an INTENTIONAL symlink loop (stage-release.yml:
+  # releases/runtime-<ver> -> /opt/theia, current -> releases/runtime-<ver>);
+  # ansible's recurse walks it in Python and dies "maximum recursion depth
+  # exceeded". GNU chown -R does NOT follow symlinks into the tree (no -L) and
+  # detects loops, so it chowns the real files loop-safely.
+  ansible.builtin.command:
+    cmd: "chown -R theia:theia {{ theia_root | default('/opt/theia') }}"
+  changed_when: true
