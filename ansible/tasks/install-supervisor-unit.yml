@@ -58,7 +58,7 @@
       [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ] || kill -TERM "$pid" 2>/dev/null
     done
     sleep 1
-    setsid env THEIA_MACHINE={{ machine }} THEIA_MACHINE_INSTANCE={{ machine_instance | default(0) }} /opt/theia/bin/theia-run >/var/log/theia-supervisor.log 2>&1 < /dev/null &
+    setsid env THEIA_MACHINE={{ machine }} THEIA_MACHINE_INSTANCE={{ machine_instance | default(0) }} THEIA_TIPC_NETID={{ tipc_netid | default('') }} /opt/theia/bin/theia-run >/var/log/theia-supervisor.log 2>&1 < /dev/null &
     true
   args:
     executable: /bin/bash

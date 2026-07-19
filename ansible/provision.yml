@@ -71,6 +71,9 @@
         # L4-B: the cross-board TIPC eth bearer device (e.g. eth0). Empty/unset →
         # single-board rig, no bearer (tipc-bearer.yml is a no-op).
         tipc_bearer: "{{ tipc_bearer | default('') }}"
+        # Per-rig TIPC netid (cluster isolation) — threaded to the supervisor
+        # unit / container start; theia-run sets it before the first bind.
+        tipc_netid: "{{ tipc_netid | default('') }}"
         # etcd knobs (etcd.yml). etcd_external=true → don't install/start an etcd
         # (the host/runner already runs one, e.g. a host-network container rig); the
         # listen/advertise hosts template the shared-etcd URLs. Must be threaded
