@@ -1,11 +1,42 @@
-# Override for run-migration-e2e.sh — mounts the run's scaffolded consuming
-# workspace into the controller at /repo/ws (colony's manifest_dir + the
-# fleet deploy read it there). WS_MOUNT is exported by the driver script.
+# Standalone HOST-NETWORK stack for run-migration-e2e.sh.
+#
+# The board shares the HOST network AND TIPC namespace (the theia netid), so
+# the run's config asserts drive per DIRECTLY from the host venv probe, the
+# Mender server is plain https://127.0.0.1, and the S3 plane is the standing
+# gs-minio :9000 — no bridge joins, no on-board probe for the assertions.
+# (The migration DRIVER still runs ON the board via mender — that's the test.)
+# Reuses the ota-e2e board/controller images.
 services:
+  central:
+    build:
+      context: .
+      dockerfile: Dockerfile.board
+      args:
+        BASE: ${BOARD_BASE:-ubuntu:22.04}
+    image: theia-ota-board:latest
+    container_name: ota-central
+    hostname: central
+    privileged: true
+    cgroup: host
+    cap_add: [ NET_ADMIN ]
+    network_mode: host
+    tmpfs: [ /run, /run/lock ]
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+
   controller:
+    build:
+      context: .
+      dockerfile: Dockerfile.controller
+    image: theia-ota-controller:latest
+    container_name: ota-controller
+    network_mode: host
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${COLONY_DIR:-../..}:/repo/colony:rw
       - ${THEIA_DIR:-../../../theia}:/repo/theia:rw
       - ${GROUND_STATION_DIR:-../../../ground-station}:/repo/ground-station:rw
       - ${WS_MOUNT:?export WS_MOUNT}:/repo/ws:rw
+    working_dir: /repo
+    depends_on: [central]
+    command: ["sleep", "infinity"]

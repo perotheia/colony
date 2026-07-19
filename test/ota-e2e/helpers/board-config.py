@@ -33,12 +33,17 @@ def main() -> int:
             rep = probe.call("PerManager", "GetStoreSnapshot", timeout=5.0,
                              config_type=node)
             rows = rep.get("rows", []) or []
-            row = rows[0] if rows else {}
-            raw = row.get("config", b"") or b""
+            # a repeated MESSAGE field decodes to protobuf objects, not dicts
+            def fld(r, name, default):
+                if hasattr(r, name):
+                    return getattr(r, name)
+                return r.get(name, default) if hasattr(r, "get") else default
+            row = rows[0] if len(rows) else None
+            digest = fld(row, "digest", "") if row is not None else ""
+            raw = fld(row, "config", b"") if row is not None else b""
             if not isinstance(raw, (bytes, bytearray)):
                 raw = bytes(raw)
-            print(json.dumps({"digest": row.get("digest", ""),
-                              "hex": raw.hex()}))
+            print(json.dumps({"digest": digest, "hex": raw.hex()}))
             return 0
         if verb == "put":
             digest, hx = sys.argv[3], sys.argv[4]
