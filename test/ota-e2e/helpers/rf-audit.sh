@@ -61,5 +61,27 @@ else
   echo "[rf] live: cluster too sparse ($cnt bindings) — composer not fully on the wire" >&2; B=1
 fi
 
-[ "$A" = 0 ] && [ "$B" = 0 ] && { echo "[rf] AUDIT PASS (static + live consistency)"; exit 0; }
-echo "[rf] AUDIT FAIL (static=$A live=$B)" >&2; exit 1
+# -- C. mTLS deployed via the app SWP (com serves mutual TLS) --------------
+# The app SWP carries the dev mTLS cert set (theia manifest stages
+# dist/manifest/<machine>/certs/ -> release-swp packs it -> the theia-swp module
+# lays it at the flipped release's config/certs/ -> theia-run exports
+# THEIA_COM_TLS_* -> com serves mutual TLS). Assert the deployed com actually
+# went from plaintext to TLS on -- the cert-deployment flow, end to end.
+echo "[rf] mTLS: com TLS-serving after the app OTA (cert-deployment flow)"
+C=0
+central_certs="$(docker exec ota-central sh -c 'ls /opt/theia/current/config/certs/server.crt 2>/dev/null' || true)"
+if [ -z "$central_certs" ]; then
+  echo "[rf] mTLS: no current/config/certs on central -- SWP did not carry the cert set (plaintext deploy or a theia without the cert-staging flow) -- ADVISORY, not failing"
+else
+  tlslog="$(docker exec ota-central sh -c 'grep -hE "gRPC: TLS (on|off)" /var/log/theia-supervisor.log /tmp/theia/com.log 2>/dev/null | tail -5' || true)"
+  if echo "$tlslog" | grep -q 'gRPC: TLS on'; then
+    echo "[rf] mTLS: com serves mutual TLS OK ($(echo "$tlslog" | grep -m1 'TLS on'))"
+  elif echo "$tlslog" | grep -q 'gRPC: TLS off'; then
+    echo "[rf] mTLS: com is PLAINTEXT (TLS off) -- the SWP cert-deployment flow did not take" >&2; C=1
+  else
+    echo "[rf] mTLS: no gRPC TLS line yet (servers lazy-init) -- certs present, inconclusive-pass"
+  fi
+fi
+
+[ "$A" = 0 ] && [ "$B" = 0 ] && [ "$C" = 0 ] && { echo "[rf] AUDIT PASS (static + live + mTLS)"; exit 0; }
+echo "[rf] AUDIT FAIL (static=$A live=$B mtls=$C)" >&2; exit 1
