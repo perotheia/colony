@@ -122,7 +122,7 @@ if [ "$DO_BUILD" = 1 ]; then
     && cp "$THEIA_DIR"/ci/demo/system-apps/*.art system/apps/ \
     && ( cd "$THEIA_DIR/ci/demo/impl" && find . -type f ) | while read -r f; do
          mkdir -p "$WS/apps/$(dirname "$f")"; cp "$THEIA_DIR/ci/demo/impl/$f" "$WS/apps/$f"; done \
-    && artheia gen-app --kind fc system/apps/component.art --out apps --proto-out proto >/dev/null \
+    && artheia gen-fc system/apps/component.art >/dev/null \
     && artheia gen-manifest system/apps/component.art manifest/apps/manifest.py >/dev/null ) \
     || die "ws scaffold failed"
   ( cd "$WS" && theia manifest apps >/dev/null ) || die "theia manifest failed"
@@ -269,7 +269,7 @@ new = ("    uint32 ceiling    = 100          // saturate at this (renamed from m
 assert old in s, "package.art shape drifted — update the e2e's evolve step"
 p.write_text(s.replace(old, new))
 PY
-( cd "$WS" && artheia gen-app --kind fc system/apps/component.art --out apps --proto-out proto >/dev/null ) || die "regen failed"
+( cd "$WS" && artheia gen-fc system/apps/component.art >/dev/null ) || die "regen failed"
 # the REVIEWED transform (the gen-migration scaffold flags the tag-shift cascade
 # for review; this IS the reviewed result)
 mkdir -p "$WS/apps/apps/migrations"
