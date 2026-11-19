@@ -38,12 +38,25 @@
     - machine == etcd_machine
     - not (etcd_external | default(false) | bool)
 
+# Restart ONLY when /etc/default/etcd changed: an unconditional restart bounced etcd under the running Theia
+# stack on every re-provision (live UI test 2026-11-19, AI-64). Otherwise just make sure it runs.
 - name: "Restart etcd on config change (systemd hosts)"
   ansible.builtin.systemd:
     name: etcd
     state: restarted
     enabled: true
     daemon_reload: true
+  when:
+    - machine == etcd_machine
+    - not (etcd_external | default(false) | bool)
+    - ansible_service_mgr == "systemd"
+    - _etcd_cfg is changed
+
+- name: "etcd enabled + running (systemd hosts)"
+  ansible.builtin.systemd:
+    name: etcd
+    state: started
+    enabled: true
   when:
     - machine == etcd_machine
     - not (etcd_external | default(false) | bool)
