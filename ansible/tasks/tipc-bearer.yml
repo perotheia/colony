@@ -10,6 +10,11 @@
 # Gated on the registry's `tipc_bearer` (e.g. eth0); single-board rigs omit it.
 # Idempotent: `tipc bearer enable` is a no-op-ish re-run (already-enabled errors
 # are ignored).
+- name: "TIPC kernel module: loaded now and at every boot (theia's IPC; single-board rigs need it too)"
+  ansible.builtin.shell:
+    cmd: "modprobe tipc && echo tipc > /etc/modules-load.d/theia-tipc.conf"
+    creates: /etc/modules-load.d/theia-tipc.conf
+
 - name: "Ensure the tipc kernel module is loaded (best-effort; no collection)"
   ansible.builtin.command: modprobe tipc
   become: true
