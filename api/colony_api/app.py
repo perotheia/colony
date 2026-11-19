@@ -231,7 +231,7 @@ def create_app() -> FastAPI:
             "echo set-identity-ok"
         )
         h, port = _split_hostport(host)
-        cmd = ["ssh", "-o", "BatchMode=yes", *_SSH_TRUST,
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", *_SSH_TRUST,
                "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa"]
         if port:
             cmd += ["-p", port]
@@ -242,7 +242,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=502, detail=f"set-identity {host}: {e}")
         if out.returncode != 0 or "set-identity-ok" not in out.stdout:
             raise HTTPException(status_code=502,
-                                detail=f"set-identity {host} failed: {(out.stderr or out.stdout).strip()[:200]}")
+                                detail=f"set-identity {host} failed: {(out.stderr or out.stdout).strip()[-300:]}")
         return {"host": host, "controller_id": cid, "status": "identity-set"}
 
     @app.get("/pubkey", tags=["enrol"])
@@ -283,7 +283,7 @@ def create_app() -> FastAPI:
             "elif sudo -n true >/dev/null 2>&1; then echo sudo=ok; else echo sudo=no; fi"
         )
         h, port = _split_hostport(host)
-        cmd = ["ssh", "-o", "BatchMode=yes", *_SSH_TRUST,
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", *_SSH_TRUST,
                "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa"]
         if port:
             cmd += ["-p", port]
@@ -294,7 +294,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=502, detail=f"probe {host}: {e}")
         if out.returncode != 0:
             raise HTTPException(status_code=502,
-                                detail=f"probe {host} failed: {(out.stderr or out.stdout).strip()[:200]}")
+                                detail=f"probe {host} failed: {(out.stderr or out.stdout).strip()[-300:]}")
         info = {}
         for line in out.stdout.splitlines():
             if "=" in line:
