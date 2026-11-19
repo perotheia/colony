@@ -8,7 +8,8 @@
 # exec), so this image needs the docker CLI + the community.docker collection and
 # the docker socket (mounted by the compose file). The repos (colony, theia,
 # ground-station) are bind-mounted at run time.
-FROM debian:bookworm
+# Pinned by digest (debian:bookworm, index digest — multi-arch).
+FROM debian:bookworm@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -25,7 +26,11 @@ RUN pip3 install --break-system-packages \
         "ansible-core>=2.16" \
         "textX>=4.0" "Jinja2>=3.1" "click>=8.1" "PyYAML>=6.0" "protobuf>=4.21" \
         "robotframework>=7.0" "pydantic>=2.0" \
-    || pip3 install "ansible-core>=2.16" textX Jinja2 click PyYAML protobuf robotframework pydantic
+        "fastapi>=0.110" "uvicorn>=0.29" "cryptography>=42" "grpcio>=1.60" \
+    || pip3 install "ansible-core>=2.16" textX Jinja2 click PyYAML protobuf robotframework pydantic \
+        fastapi uvicorn cryptography grpcio
+# fastapi/uvicorn/cryptography: the throwaway fleet signer (helpers/pki-signer.py runs the ground station's
+# routers/pki.py). grpcio: the com mutual-TLS regression probe (helpers/com-mtls-check.py).
 
 # The MODERN docker CLI (docker-ce-cli) from Docker's official repo — debian's
 # `docker.io` ships an API-1.41 client that a Docker-29 host daemon (min API 1.44)

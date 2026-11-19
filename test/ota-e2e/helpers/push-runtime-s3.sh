@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # push-runtime-s3.sh <ver> <s3_url> <deb...> — publish runtime/services .debs +
-# the manifest bundle to the MinIO runtime plane theia-runtime/<ver>/, matching what
+# the manifest bundle to the S3 runtime plane theia-runtime/<ver>/, matching what
 # the REAL `theia release` (_release_runtime_plane) publishes and what colony
 # provision (fetch-manifest-s3.yml) consumes:
 #   <ver>/<deb>            the runtime + services debs
@@ -12,7 +12,8 @@
 #                          $THEIA_DIR/platform/runtime/ota. provision fetches this
 #                          single GET and unpacks it (no theia checkout on the board).
 # The manifest MUST already be serialized (dist/manifest) — the caller serializes
-# BEFORE this push. aws-cli against MinIO; creds from MINIO_USER/PASSWORD.
+# BEFORE this push. aws-cli against the S3 (SeaweedFS, as the GS's gs-s3); creds from
+# MINIO_USER/PASSWORD (the old variable names, kept).
 set -euo pipefail
 VER="${1:?ver}"; S3="${2:?s3 url}"; shift 2
 DEBS=("$@"); [ "${#DEBS[@]}" -gt 0 ] || { echo "no debs given" >&2; exit 1; }
@@ -22,15 +23,11 @@ export AWS_ACCESS_KEY_ID="${MINIO_USER:-theia}"
 export AWS_SECRET_ACCESS_KEY="${MINIO_PASSWORD:-theiaminio}"
 export AWS_DEFAULT_REGION="us-east-1"
 AWS=(aws --endpoint-url "$S3" s3)
-AWSAPI=(aws --endpoint-url "$S3" s3api)
 
 "${AWS[@]}" mb "s3://$BUCKET" 2>/dev/null || true   # idempotent
-cat > /tmp/.s3pol-$$.json <<POL
-{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},
- "Action":["s3:GetObject"],"Resource":["arn:aws:s3:::$BUCKET/*"]}]}
-POL
-"${AWSAPI[@]}" put-bucket-policy --bucket "$BUCKET" --policy "file:///tmp/.s3pol-$$.json" >/dev/null 2>&1 || true
-rm -f /tmp/.s3pol-$$.json
+# Anonymous READ of the bucket (the rigs' + the controller's plain-HTTP fetch) is
+# granted by the S3's identity config (seaweedfs-s3.json: identity "anonymous"), as
+# on the ground station — SeaweedFS has no bucket policies.
 WORK="$(mktemp -d)"; trap "rm -rf \"$WORK\"" EXIT
 
 # 1) debs + index.json (unchanged contract)

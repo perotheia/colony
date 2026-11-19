@@ -63,7 +63,7 @@ sudo modprobe tipc 2>/dev/null || modprobe tipc 2>/dev/null || die "modprobe tip
 # etcd on the host (the boards treat it as external — registry etcd_external:true).
 if ! curl -sf http://127.0.0.1:2379/health >/dev/null 2>&1; then
   log "starting a host etcd (none on :2379)"
-  docker run -d --name ota-etcd --network host quay.io/coreos/etcd:v3.5.12 \
+  docker run -d --name ota-etcd --network host quay.io/coreos/etcd:v3.5.12@sha256:847423221ed040798e47df36450edce5581ed642cd087ccb210532764da38b23 \
     /usr/local/bin/etcd --listen-client-urls=http://127.0.0.1:2379 \
     --advertise-client-urls=http://127.0.0.1:2379 >/dev/null
   for i in $(seq 1 15); do curl -sf http://127.0.0.1:2379/health >/dev/null 2>&1 && break; sleep 1; done

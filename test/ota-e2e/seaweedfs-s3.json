@@ -1,0 +1,5 @@
+{"identities": [
+  {"name": "anonymous", "actions": ["Read:theia-runtime", "List:theia-runtime"]},
+  {"name": "theia", "credentials": [{"accessKey": "theia", "secretKey": "theiaminio"}],
+   "actions": ["Admin", "Read", "Write", "List", "Tagging"]}
+]}

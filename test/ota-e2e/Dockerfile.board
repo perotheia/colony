@@ -18,10 +18,10 @@
 # (per's grpc/protobuf/boost/absl closure, nm's nftables) against the build host's
 # system .so's. A mismatched board has different .so versions → the FCs exit 127
 # ("libprotobuf.so.NN: cannot open"). Same-distro is the real-deploy contract.
-#   BASE=ubuntu:22.04  ← build host is 22.04 (local dev box / jammy)
-#   BASE=ubuntu:24.04  ← build host is 24.04 (GitHub ubuntu-latest / noble)
-# run-full-story.sh detects the host and passes --build-arg BASE accordingly.
-ARG BASE=ubuntu:22.04
+#   BASE=ubuntu:22.04@sha256:…  ← build host is 22.04 (local dev box / jammy)
+#   BASE=ubuntu:24.04@sha256:…  ← build host is 24.04 (GitHub ubuntu-24.04 / noble)
+# run-full-story.sh detects the host and passes BOARD_BASE (pinned BY DIGEST) accordingly.
+ARG BASE=ubuntu:22.04@sha256:9abcaffc92a5279fff3a6a41635c0800ea33e528425fb389658806476e7defde
 FROM ${BASE}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv dbus \
         sudo ca-certificates curl gnupg \
         python3 python3-minimal \
-        iproute2 libcap2-bin tar gzip zstd \
+        iproute2 libcap2-bin tar gzip zstd kmod \
         procps net-tools \
         libgrpc++-dev libprotobuf-dev \
         libboost-system-dev libboost-random-dev \
