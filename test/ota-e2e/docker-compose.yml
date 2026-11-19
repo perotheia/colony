@@ -13,7 +13,17 @@
 #   central     a Theia rig (systemd) — services slice + etcd + mender-gw, inst 0
 #   compute     a Theia rig (systemd) — ucm + shwa, inst 1
 #   controller  drives colony ansible (docker-conn) + enroll-rig.sh + fleet.py
-#   minio       the THEIA artifact S3 (theia-runtime/ + app plane)
+#   s3          the THEIA artifact S3 (theia-runtime/ + app plane): SeaweedFS, the SAME
+#               image + `server -s3` shape as the ground station's gs-s3 (minio/minio is
+#               withdrawn). Credentials + the anonymous-read grant: seaweedfs-s3.json.
+#
+# Every image is pinned by DIGEST (the board/controller bases in their Dockerfiles;
+# BOARD_BASE is resolved to a digest by run-full-story.sh).
+#
+# com mutual TLS: the boards' com REQUIRES the fleet certificate (theia-run.sh,
+# THEIA_COM_TLS_REQUIRED=1). The controller runs a throwaway fleet signer
+# (helpers/pki-signer.py = ground-station's routers/pki.py) and colony provision
+# lays /etc/theia/pki through the normal path (tasks/pki-enroll.yml, gs_pki_url).
 #
 # Boards run systemd as PID 1 → privileged + cgroup mount. NET_ADMIN lets the TIPC
 # bearer enable on eth0. The Mender server (ground-station up.sh) is joined to this
@@ -25,14 +35,15 @@ networks:
     driver: bridge
 
 services:
-  minio:
-    image: minio/minio:latest
-    container_name: ota-minio
-    networks: [ota]
-    command: server /data --address ":9000" --console-address ":9001"
-    environment:
-      - MINIO_ROOT_USER=theia
-      - MINIO_ROOT_PASSWORD=theiaminio
+  s3:
+    # = ground-station docker-compose.yml service gs-s3 (same image, same command).
+    image: chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+    container_name: ota-s3
+    networks:
+      ota: { aliases: [s3] }
+    command: ["server", "-dir=/data", "-ip.bind=0.0.0.0", "-volume.max=64", "-s3", "-s3.port=9000", "-s3.config=/etc/seaweedfs/s3.json"]
+    volumes:
+      - ./seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
     tmpfs: [ /data ]
 
   central:
@@ -41,8 +52,8 @@ services:
       dockerfile: Dockerfile.board
       args:
         # Board base MUST match the build host's distro (ABI). run-full-story.sh
-        # sets BOARD_BASE from the host's os-release; default 22.04 for local dev.
-        BASE: ${BOARD_BASE:-ubuntu:22.04}
+        # sets BOARD_BASE (by digest) from the host's os-release; default 22.04.
+        BASE: ${BOARD_BASE:-ubuntu:22.04@sha256:9abcaffc92a5279fff3a6a41635c0800ea33e528425fb389658806476e7defde}
     image: theia-ota-board:latest
     container_name: ota-central
     hostname: central
@@ -52,6 +63,7 @@ services:
     tmpfs: [ /run, /run/lock ]
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /lib/modules:/lib/modules:ro     # provision's `modprobe tipc` (module already loaded by the host)
     networks:
       ota: { aliases: [central] }
     ports:                               # com's GUI gRPC views (own netns → map them)
@@ -69,6 +81,7 @@ services:
     tmpfs: [ /run, /run/lock ]
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /lib/modules:/lib/modules:ro     # provision's `modprobe tipc` (module already loaded by the host)
     networks:
       ota: { aliases: [compute] }
     depends_on: [central]

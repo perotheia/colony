@@ -2,9 +2,9 @@ name: OTA e2e (bridge, full Mender server)
 
 # The FULL 9-step nightly story, no skips, on a BRIDGE network (real-board model:
 # separate per-board TIPC namespaces linked by an eth bearer):
-#   build runtime+services (services_rig) → S3 (MinIO) → provision split_rig FROM S3
-#   → theia init demo → build demo → release apps → orchestrate apps (Mender OTA)
-#   → RF audit/consistency over the composer's TIPC.
+#   build runtime+services (services_rig) → S3 (SeaweedFS) → provision FROM S3 with the
+#   fleet PKI (a throwaway CA in the controller) → com mutual-TLS regressions → app
+#   releases → Mender OTA (signed accepted, UNSIGNED refused) → RF audit/consistency.
 #
 # Repos checked out as siblings under the workspace: colony (this), theia,
 # ground-station — then test/ota-e2e/run-full-story.sh drives it.
@@ -25,11 +25,12 @@ permissions:
 
 jobs:
   ota-e2e:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moves to 26.04 (no pinned board base / soname map for it yet).
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
       - name: Free up runner disk (drop pre-loaded toolchains)
-        # bazel + the Mender images + board/minio/controller images need headroom
+        # bazel + the Mender images + board/s3/controller images need headroom
         # on the 14GB runner disk. Reclaim the ~25-30GB of android/dotnet/ghc/etc.
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \

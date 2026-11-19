@@ -13,7 +13,11 @@ are colony's; they drive the `theia` build and the `ground-station` Mender/OTA s
 
 - Workflow: [`.github/workflows/ota-e2e.yml`](https://github.com/perotheia/colony/blob/main/.github/workflows/ota-e2e.yml)
 - Driver: [`test/ota-e2e/run-full-story.sh`](https://github.com/perotheia/colony/blob/main/test/ota-e2e/run-full-story.sh)
-- Status: **green on `ubuntu-latest`**, 9/9 steps, ~20 min cached. Schedule `0 3 * * *` + `workflow_dispatch`.
+- Status: runs on `ubuntu-24.04` (pinned). Schedule `0 3 * * *` + `workflow_dispatch`.
+- com **mutual TLS is mandatory** on the rigs: a throwaway fleet CA in the controller
+  (`helpers/pki-signer.py` = ground-station `routers/pki.py`), rigs enrolled through
+  colony's `tasks/pki-enroll.yml` (`gs_pki_url`); regression checks listed in
+  `test/ota-e2e/README.md`. S3 = SeaweedFS (the GS's `gs-s3` image); images by digest.
 
 ---
 
@@ -22,13 +26,13 @@ are colony's; they drive the `theia` build and the `ground-station` Mender/OTA s
 ```
 1  fresh theia (+ submodules)
 2  build runtime+services from manifest.services.services_rig  → debs        (bazel)
-3  release those debs → S3 (MinIO)  theia-runtime/<ver>/
+3  release those debs → S3 (SeaweedFS)  theia-runtime/<ver>/
 4  colony provision+orchestrate split_rig FROM S3              central = the singletons (com/per/sm/phm/vucm/…)
    (NO rebuild — just serialized manifests, arch/os per board)  compute = ucm + shwa
-5  theia init --with-services in demo/   (the USER workspace)
-6  build demo/dist                       central = services, compute = p1-p4 + shwa
-7  release the demo USER APPS → S3 / .mender artifacts
-8  colony orchestrate the demo apps over Mender OTA            central = services, compute = p1,p2,p3,p4,shwa
+4b com mutual-TLS regressions (fleet cert from the throwaway CA via pki-enroll)
+5  compose the app-plane release trees (theia demo/ was retired 2026-07-10)
+6+7 pack them as SIGNED .mender → S3
+8  app OTA over Mender (+ the com mTLS checks again)   8.5 signed patch   8.6 UNSIGNED refused
 9  RF audit/consistency over the live composer's TIPC
 ```
 
@@ -120,13 +124,13 @@ genuinely on the wire, over the real bearer, not just consistent on paper.
         │ aws (S3 push)                                              (broadcast-link)
         ▼                                                            │
    ┌──────────┐  install-runtime-s3 ◄── boards pull by name   ┌──────┴───────┐
-   │  minio   │  theia-runtime/<ver>/ + user-software/         │  compute     │  inst 1
+   │  s3      │  theia-runtime/<ver>/ + user-software/         │  compute     │  inst 1
    │  (S3)    │                                                │  p1-p4 +shwa │
    └──────────┘                                                └──────────────┘
         ▲  bridge: ota-e2e ; mender-server uses its OWN seaweedfs (internal)
 ```
 
-- **MinIO** = the THEIA artifact S3 (runtime plane + app plane). Distinct from the
+- **SeaweedFS** (`ota-s3`) = the THEIA artifact S3 (runtime plane + app plane). Distinct from the
   Mender server's internal seaweedfs.
 - **mender-server** = the OSS stack (ground-station `up.sh`), *trimmed* to ~1.4GB
   (gui/deviceconfig/deviceconnect/iot-manager + the 1.3GB qemu client dropped — none
@@ -190,7 +194,7 @@ The runner is **Ubuntu 24.04**; getting green meant matching the build host's
 | `nanopb_generator: command not found` | `pip install nanopb` into the venv |
 | stale `theia-services_0.2.0` deb (6 FCs) picked by `find\|head -1` | pick the deb matching the current `_VERSION`; guard ≥10 FCs |
 | deb `Depends: libgrpc++1` (22.04) vs board's `libgrpc++1.51t64` (24.04) | build with `--define distro=ubuntu24` on a 24.04 host |
-| MinIO bucket private → 403 on the anonymous `install-runtime-s3` fetch | `push-runtime-s3.sh` sets the bucket public-read (matches dalek) |
+| bucket private → 403 on the anonymous `install-runtime-s3` fetch | `seaweedfs-s3.json` grants `anonymous` Read/List on `theia-runtime` (as the GS) |
 | `mender-artifact` not on the runner | install the pinned deb (noble, jammy fallback) |
 
 ---

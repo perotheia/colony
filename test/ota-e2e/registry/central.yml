@@ -1,8 +1,8 @@
 # OTA e2e test registry — central (the gateway/coordinator board container).
 #
 # BRIDGE network: own netns/TIPC namespace (the real rpi4 model). Reached via the
-# docker connection (ansible exec). The runtime+services are pulled FROM S3 (MinIO
-# at the `ota-minio` container, runtime_version pinned) — the install-runtime-s3
+# docker connection (ansible exec). The runtime+services are pulled FROM S3 (the S3
+# at the `ota-s3` container, runtime_version pinned) — the install-runtime-s3
 # path (Phase A). Cross-board reaches compute over a real TIPC eth bearer.
 ansible_host: ota-central
 ansible_connection: community.docker.docker
@@ -12,9 +12,9 @@ role: master       # DEPLOYMENT identity (etcd coordinator, mender gateway)
 arch: x86_64
 deb_arch: amd64
 
-# S3 runtime plane (MinIO on the bridge — reached by container DNS name).
+# S3 runtime plane (the S3 on the bridge — reached by container DNS name).
 runtime_version: e2e-local
-s3_endpoint: http://ota-minio:9000
+s3_endpoint: http://ota-s3:9000
 s3_runtime_bucket: theia-runtime
 
 # central is the etcd singleton. On a bridge it has its OWN netns, so it runs its
