@@ -10,10 +10,49 @@
 #   theia_root          /opt/theia
 #   vpn_authkey_path    where the per-rig auth key lives
 #                       (default /etc/theia/manifest/<machine>/certs/vpn.authkey)
+#   tailscale_version   pinned version for the static install (rigs without apt)
+- name: "Detect the package manager (apt rigs use the official script; others the static tarball)"
+  ansible.builtin.stat:
+    path: /usr/bin/apt-get
+  register: _ts_apt
+
 - name: "Install tailscale (official apt repo script; once)"
   ansible.builtin.shell:
     cmd: "curl -fsSL https://tailscale.com/install.sh | sh"
     creates: /usr/bin/tailscale
+  when: _ts_apt.stat.exists
+
+# Rigs without apt (e.g. TI Arago / Yocto images such as the SK-TDA4VM): install.sh refuses them.
+# Install Tailscale's official static arm64/amd64 build, pinned, with its own systemd unit.
+- name: "Static tailscale install (non-apt rigs)"
+  when: not _ts_apt.stat.exists
+  block:
+    - name: "Map the CPU to Tailscale's tarball arch"
+      ansible.builtin.command: uname -m
+      register: _ts_uname
+      changed_when: false
+
+    - name: "Download + unpack the pinned static build (once)"
+      ansible.builtin.shell:
+        cmd: >-
+          set -e;
+          a={{ {'aarch64': 'arm64', 'x86_64': 'amd64', 'armv7l': 'arm'}[_ts_uname.stdout | trim] }};
+          v={{ tailscale_version | default('1.104.4') }};
+          d=$(mktemp -d);
+          curl -4 -fsSL "https://pkgs.tailscale.com/stable/tailscale_${v}_${a}.tgz" | tar -xz -C "$d";
+          install -m 0755 "$d"/tailscale_${v}_${a}/tailscaled /usr/sbin/tailscaled;
+          install -m 0755 "$d"/tailscale_${v}_${a}/tailscale /usr/bin/tailscale;
+          install -m 0644 "$d"/tailscale_${v}_${a}/systemd/tailscaled.service /etc/systemd/system/tailscaled.service;
+          [ -f /etc/default/tailscaled ] || install -m 0644 "$d"/tailscale_${v}_${a}/systemd/tailscaled.defaults /etc/default/tailscaled;
+          rm -rf "$d"
+        creates: /usr/bin/tailscale
+
+    - name: "Enable + start tailscaled"
+      ansible.builtin.systemd:
+        name: tailscaled
+        enabled: true
+        state: started
+        daemon_reload: true
 
 - name: "Read the per-rig VPN auth key"
   ansible.builtin.slurp:

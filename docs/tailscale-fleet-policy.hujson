@@ -1,0 +1,35 @@
+// Theia fleet tailnet policy (colony / ground-station). Owner: tailnet admins.
+// Tags are applied by pre-authorised auth keys minted by ground-station enroll/rig_enroll.py
+// (TS_API_TOKEN): tag:fleet-gs for the ground station + provisioning server (panzer),
+// tag:fleet-rig for every rig (BeagleBone AI-64, SK-TDA4VM, ...). Rigs never talk to each other.
+{
+	"tagOwners": {
+		"tag:fleet-gs":  ["autogroup:admin"],
+		"tag:fleet-rig": ["autogroup:admin"],
+	},
+
+	"grants": [
+		// Operators (tailnet members, e.g. dev laptops) reach everything in the fleet tailnet.
+		{"src": ["autogroup:member"], "dst": ["*"], "ip": ["*"]},
+
+		// Ground station / provisioning server -> rigs: ssh (colony Ansible), com gRPC (rig_enroll Provision), any rig service.
+		{"src": ["tag:fleet-gs"], "dst": ["tag:fleet-rig"], "ip": ["*"]},
+
+		// Rigs -> ground station only: Mender server (HTTPS), MAVLink telemetry (UDP 14550-14560).
+		{"src": ["tag:fleet-rig"], "dst": ["tag:fleet-gs"], "ip": ["tcp:443", "udp:14550-14560"]},
+	],
+
+	"ssh": [
+		{
+			"action": "check",
+			"src":    ["autogroup:member"],
+			"dst":    ["autogroup:self"],
+			"users":  ["autogroup:nonroot", "root"],
+		},
+	],
+
+	"tests": [
+		{"src": "tag:fleet-gs",  "accept": ["tag:fleet-rig:22", "tag:fleet-rig:7700"]},
+		{"src": "tag:fleet-rig", "accept": ["tag:fleet-gs:443"], "deny": ["tag:fleet-gs:22", "tag:fleet-rig:22"]},
+	],
+}
