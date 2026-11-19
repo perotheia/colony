@@ -43,6 +43,11 @@ ok: [ai64-proto] => {
     "msg": "authkey SECRET_VALUE"
 }
 
+TASK [COLONY_MENDER_PUBKEY master] ************************************************
+ok: [ai64-proto] => {
+    "msg": "COLONY_MENDER_PUBKEY master LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3PT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg=="
+}
+
 TASK [COLONY_VPN_IP master] ****************************************************
 ok: [ai64-proto] => {
     "msg": "COLONY_VPN_IP master 100.91.130.60"

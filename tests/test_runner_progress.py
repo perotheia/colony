@@ -71,12 +71,13 @@ def test_progress_advances_while_running(fake, tmp_path):
     assert d["statistics"]["status"]["success"] == 1 and d["rc"] == 0
     assert d["vpn_ip"] == "100.91.130.60"
     assert d["pki"] == {"serial": "5d3f9a0c41e2", "not_after": "2027-11-19T10:00:00Z"}
+    assert d["mender_pubkey"].startswith("LS0tLS1CRUdJTiBQVUJMSUMgS0VZ")   # kept as a field (log cap must not cut it)
     assert d["rig_class"] == "apt"
     assert d["skipped_by_design"] == ["mender-artifact-install", "opkg-feed"]
     p = d["progress"]
     assert p["current_task"] is None
     assert p["failed_task"] is None and p["failed_msg"] is None   # the ignored failure is not the play's
-    assert p["tasks_done"] == len(p["tasks"]) == 14
+    assert p["tasks_done"] == len(p["tasks"]) == 15
     by_name = {t["name"]: t["result"] for t in p["tasks"]}
     assert by_name["Base dirs"] == "changed"
     assert by_name["Apt holds (kernel, bootloader)"] == "skipped"

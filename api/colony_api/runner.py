@@ -66,6 +66,7 @@ _INCLUDED_RE = re.compile(r"^included: ")
 _IGNORING_RE = re.compile(r"^\.\.\.ignoring\s*$")
 _VPN_RE = re.compile(r"COLONY_VPN_IP \S+ (\d+\.\d+\.\d+\.\d+)")
 _PKI_RE = re.compile(r'COLONY_PKI \S+ serial (?P<serial>\S+) until (?P<until>[^"\n]+)')
+_MKEY_RE = re.compile(r'"msg": "COLONY_MENDER_PUBKEY \S+ (?P<b64>[A-Za-z0-9+/=]+)"')
 _RIG_CLASS_RE = re.compile(r'rig_class=(?P<cls>[^;"\s]+); skipped by design: (?P<skips>[^"\n]*)')
 _MSG_RE = re.compile(r'"msg":\s*"((?:[^"\\]|\\.)*)"')
 _STDERR_RE = re.compile(r'"stderr":\s*"((?:[^"\\]|\\.)*)"')
@@ -133,6 +134,10 @@ class PlayProgress:
         if m and not _TASK_RE.match(line):
             self.fields["pki"] = {"serial": m.group("serial"),
                                   "not_after": m.group("until").strip()}
+            changed = True
+        m = _MKEY_RE.search(line)
+        if m and not _TASK_RE.match(line):   # kept as a field: the 64 KB log cap must not cut the key the GS accepts
+            self.fields["mender_pubkey"] = m.group("b64")
             changed = True
         m = _RIG_CLASS_RE.search(line)
         if m and not _TASK_RE.match(line):
@@ -274,6 +279,7 @@ class Runner:
             "vpn_ip": None,
             "pki": None,                # {serial, not_after} from the `COLONY_PKI` report
             "rig_class": None,
+            "mender_pubkey": None,      # base64 PEM from COLONY_MENDER_PUBKEY (the GS binds auto-accept to it)
             "skipped_by_design": None,  # [..] from the `rig_class=..; skipped by design: ..` report
         }
         with self._cv:
@@ -431,7 +437,7 @@ class Runner:
                     rec["log_tail"] = tail
                     if changed:
                         rec["progress"] = prog.snapshot()
-                        for k in ("vpn_ip", "pki", "rig_class", "skipped_by_design"):
+                        for k in ("vpn_ip", "pki", "rig_class", "skipped_by_design", "mender_pubkey"):
                             if prog.fields.get(k) is not None:
                                 rec[k] = prog.fields[k]
                         if _now() - last_spill >= _SPILL_EVERY:
@@ -469,7 +475,7 @@ class Runner:
             stats["failure"] = 1          # nonzero exit, no recap → failure
         prog.finish(ok=stats["success"] == 1 and stats["failure"] == 0, log=log)
         with self._cv:
-            for k in ("vpn_ip", "pki", "rig_class", "skipped_by_design"):
+            for k in ("vpn_ip", "pki", "rig_class", "skipped_by_design", "mender_pubkey"):
                 if prog.fields.get(k) is not None:
                     rec[k] = prog.fields[k]
             rec["status"] = FINISHED
