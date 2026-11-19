@@ -46,10 +46,26 @@
   loop_control:
     label: "{{ item.file | basename }}"
 
-- name: "Dpkg --install runtime + services (--force-overwrite)"
+- name: "Install runtime + services with their dependencies (debian rigs: apt on the local .debs, no upgrades)"
+  # apt (not bare dpkg) so the packages' Depends (e.g. libprotobuf32t64 on trixie) are resolved; nothing else
+  # on the rig is upgraded (--no-upgrade applies to already-installed packages named on the line: none are).
   ansible.builtin.command:
-    cmd: "dpkg --install --force-overwrite {{ _runtime_debs | map(attribute='file') | map('basename') | map('regex_replace', '^', theia_root + '/ipk/') | join(' ') }}"
+    cmd: >-
+      apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-overwrite
+      {{ _runtime_debs | map(attribute='file') | map('basename') | map('regex_replace', '^', theia_root + '/ipk/') | join(' ') }}
   environment:
     PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    DEBIAN_FRONTEND: noninteractive
   register: _dpkg
   changed_when: _dpkg.rc == 0
+  when: (rig_class | default('debian')) == 'debian'
+
+- name: "Install runtime + services by UNPACKING the packages (opkg rigs: no dpkg; maintainer scripts not run)"
+  # A .deb is an ar archive with data.tar.*: Arago has ar + tar. The payload lands under /opt/theia like on a
+  # debian rig; what the postinst would do (the theia user, ownership) is done by colony's own tasks after.
+  ansible.builtin.shell:
+    cmd: >-
+      set -e; for d in {{ _runtime_debs | map(attribute='file') | map('basename') | map('regex_replace', '^', theia_root + '/ipk/') | join(' ') }}; do
+      t=$(mktemp -d); (cd "$t" && ar x "$d" && tar -xf data.tar.* -C /); rm -rf "$t"; done
+  register: _dpkg
+  when: (rig_class | default('debian')) == 'opkg'
