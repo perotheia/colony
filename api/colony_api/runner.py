@@ -181,6 +181,10 @@ class Runner:
 
     def _run_play(self, rec: dict) -> None:
         env = {**os.environ}
+        kh = os.environ.get("COLONY_KNOWN_HOSTS", "/var/lib/colony/known_hosts")
+        env["ANSIBLE_HOST_KEY_CHECKING"] = "True"
+        env["ANSIBLE_SSH_ARGS"] = ("-o ControlMaster=auto -o ControlPersist=60s "
+                                   f"-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={kh}")
         # colony CLI resolves the registry/bundle from $THEIA_WORKSPACE.
         cmd = ["python3", str(_COLONY_BIN), rec["kind"], rec["rig"]]
         # REGISTRY-FREE: pass host + role as FLAGS so colony resolves the device

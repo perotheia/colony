@@ -15,6 +15,8 @@ same pattern gs-api uses (unset → open for the gs-api-only path).
 """
 from __future__ import annotations
 
+import hmac
+import re
 import os
 import subprocess
 
@@ -41,10 +43,28 @@ def _split_hostport(host: str):
 _VALID_KINDS = {"provision", "orchestrate", "cleanup"}
 
 
-def _require_key(x_colony_key: str | None = Header(default=None)) -> None:
+def _key_ok(got: str | None) -> bool:
     want = os.environ.get("COLONY_API_KEY", "")
-    if want and x_colony_key != want:
+    return bool(want) and bool(got) and hmac.compare_digest(got.encode(), want.encode())
+
+
+def _require_key(x_colony_key: str | None = Header(default=None)) -> None:
+    if not _key_ok(x_colony_key):
         raise HTTPException(status_code=401, detail="invalid or missing X-Colony-Key")
+
+
+# ssh to a rig: host keys are RECORDED on first contact (enrollment) in a persistent file and ENFORCED after
+# (accept-new = trust on first use, then strict): a changed key fails instead of being accepted silently.
+_KNOWN_HOSTS = os.environ.get("COLONY_KNOWN_HOSTS", "/var/lib/colony/known_hosts")
+_SSH_TRUST = ["-o", f"UserKnownHostsFile={_KNOWN_HOSTS}", "-o", "StrictHostKeyChecking=accept-new"]
+_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,252}(:[0-9]{1,5})?$")
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}$")
+
+
+def _check(kind: str, value: str, rx: re.Pattern) -> str:
+    if not isinstance(value, str) or not rx.match(value):
+        raise HTTPException(status_code=422, detail=f"{kind}: not a valid value")
+    return value
 
 
 class DeployRequest(BaseModel):
@@ -65,10 +85,21 @@ def create_app() -> FastAPI:
                   version=__version__,
                   description="Mender-shaped REST over the colony deploy adapter "
                               "(base runtime+services deployments).")
+    if not os.environ.get("COLONY_API_KEY"):
+        raise RuntimeError("COLONY_API_KEY is not set: colony-api drives root ssh to the fleet and refuses to "
+                           "start without an API key")
+
+    @app.middleware("http")
+    async def _gate(request, call_next):          # EVERY route except /health needs the key (fail closed)
+        if request.url.path != "/health" and not _key_ok(request.headers.get("x-colony-key")):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=401, content={"detail": "invalid or missing X-Colony-Key"})
+        return await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[o.strip()
-                       for o in os.environ.get("COLONY_CORS_ORIGINS", "*").split(",")],
+                       for o in os.environ.get("COLONY_CORS_ORIGINS", "").split(",") if o.strip()],
         allow_methods=["*"], allow_headers=["*"], allow_credentials=False,
     )
 
@@ -175,6 +206,8 @@ def create_app() -> FastAPI:
         host = body.get("host"); cid = body.get("controller_id")
         if not host or not cid:
             raise HTTPException(status_code=400, detail="host and controller_id required")
+        _check("host", host, _HOST_RE)
+        _check("controller_id", cid, _ID_RE)      # goes into a root-run script: identifiers only
         user = os.environ.get("COLONY_SSH_USER", "axadmin")
         # write the identity script (idempotent) + restart mender-auth. The script
         # path is the mender default; we point the symlink target at our script.
@@ -191,7 +224,7 @@ def create_app() -> FastAPI:
             "echo set-identity-ok"
         )
         h, port = _split_hostport(host)
-        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+        cmd = ["ssh", "-o", "BatchMode=yes", *_SSH_TRUST,
                "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa"]
         if port:
             cmd += ["-p", port]
@@ -228,6 +261,7 @@ def create_app() -> FastAPI:
         (the Mender identity key) + hostname. Uses the mounted rig SSH key. The
         operator types a Host IP in the Create-Target modal; GS proxies here so
         the modal can prefill Controller ID (MAC) + Name (hostname)."""
+        _check("host", host, _HOST_RE)
         user = os.environ.get("COLONY_SSH_USER", "axadmin")
         # one ssh, read both. eth0 first; fall back to the first non-lo iface.
         # read hostname + eth0 MAC (fallback: first non-lo iface) in one ssh.
@@ -237,7 +271,7 @@ def create_app() -> FastAPI:
             "| sed 's/^/mac=/' || true"
         )
         h, port = _split_hostport(host)
-        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+        cmd = ["ssh", "-o", "BatchMode=yes", *_SSH_TRUST,
                "-o", "ConnectTimeout=8", "-i", "/root/.ssh/id_rsa"]
         if port:
             cmd += ["-p", port]
