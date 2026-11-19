@@ -111,11 +111,21 @@
         - "{{ theia_root }}"
         - "{{ theia_root }}/config"
 
+    - name: "Include rig classification (debian | opkg)"
+      ansible.builtin.include_tasks: tasks/rig-class.yml
+
     - name: "Include OS-package install (from machine.json os_packages)"
       ansible.builtin.include_tasks: tasks/os-packages.yml
+      when: rig_class == 'debian'
 
     - name: "Include etcd (cluster singleton)"
       ansible.builtin.include_tasks: tasks/etcd.yml
+      when: rig_class == 'debian'
+
+    - name: "NAMED SKIP (opkg rig): apt os_packages + etcd-server"
+      ansible.builtin.set_fact:
+        rig_skips: "{{ rig_skips + ['os-packages (apt)', 'etcd (apt package)'] }}"
+      when: rig_class != 'debian'
 
     - name: "Include the cross-board TIPC bearer (L4-B multi-board)"
       ansible.builtin.include_tasks: tasks/tipc-bearer.yml
@@ -130,3 +140,19 @@
 
     - name: "Include Mender client install + enrol"
       ansible.builtin.include_tasks: tasks/install-mender.yml
+      when: rig_class == 'debian'
+
+    - name: "NAMED SKIP (opkg rig): Mender client (no Arago package: base plane only, no OTA)"
+      ansible.builtin.set_fact:
+        rig_skips: "{{ rig_skips + ['mender client (app-plane OTA)'] }}"
+      when: rig_class != 'debian'
+
+    # The fleet VPN join (docs/fleet-vpn.md): runs when the GS passed a key (vpn_authkey) or asked for it
+    # (vpn_join=true with a key already on the rig). Both rig classes (apt script / pinned static build).
+    - name: "Include the fleet VPN join (Tailscale)"
+      ansible.builtin.include_tasks: tasks/install-tailscale.yml
+      when: (vpn_authkey is defined and vpn_authkey | length > 0) or (vpn_join | default(false) | bool)
+
+    - name: "Rig class + what was skipped for it — {{ machine }}"
+      ansible.builtin.debug:
+        msg: "rig_class={{ rig_class }}; skipped by design: {{ rig_skips | default([]) | join(', ') or 'nothing' }}"

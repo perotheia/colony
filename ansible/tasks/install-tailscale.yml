@@ -54,6 +54,17 @@
         state: started
         daemon_reload: true
 
+# The key arrives as the deployment secret `vpn_authkey` (the GS mints it per rig: single-use, pre-authorised,
+# tag:fleet-rig, short-lived) or is already on the rig (com Provision / out-of-band). It is written 0600, used
+# through `--auth-key file:` (never on a command line) and removed after the join.
+- name: "Write the per-rig VPN auth key (deployment secret)"
+  ansible.builtin.copy:
+    dest: "{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}"
+    content: "{{ vpn_authkey }}"
+    mode: "0600"
+  no_log: true
+  when: vpn_authkey is defined and vpn_authkey | length > 0
+
 - name: "Read the per-rig VPN auth key"
   ansible.builtin.slurp:
     src: "{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}"
@@ -71,7 +82,7 @@
   # route (the SSH lifeline). No exit node. hostname = the machine name.
   ansible.builtin.command: >-
     tailscale up
-    --authkey {{ (_authkey.content | b64decode | trim) }}
+    --auth-key file:{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}
     --accept-routes=false
     --accept-dns=false
     --hostname {{ machine }}
@@ -90,3 +101,19 @@
 - name: "Tailscale status"
   ansible.builtin.debug:
     msg: "{{ machine }} on the tailnet: {{ _ts_ip.stdout | default('(not joined — enroll the authkey first)') }}"
+
+- name: "Tailnet address of the rig (the GS records it as remote_ip)"
+  ansible.builtin.command: "tailscale ip -4"
+  register: _ts_ip
+  changed_when: false
+  failed_when: false
+
+- name: "Remove the used auth key (single-use) once the rig is on the tailnet"
+  ansible.builtin.file:
+    path: "{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}"
+    state: absent
+  when: (_ts_ip.stdout | default('') | trim | length) > 0
+
+- name: "COLONY_VPN_IP {{ machine }}"
+  ansible.builtin.debug:
+    msg: "COLONY_VPN_IP {{ machine }} {{ _ts_ip.stdout | default('') | trim }}"

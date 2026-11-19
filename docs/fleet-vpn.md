@@ -44,8 +44,9 @@ Never in git, the bundle, or a chat. Renew before it expires (the console shows 
    `rig_enroll.py` does this for you when it provisions a rig over com gRPC.
 2. **Deliver** it to the rig at `/etc/theia/manifest/<machine>/certs/vpn.authkey` (mode 600): through
    com's `Provision()` (`rig_enroll.py`), or out-of-band (scp) for a rig without com yet.
-3. **Join**: colony's `ansible/tasks/install-tailscale.yml` (included by `colony provision`) installs
-   Tailscale and runs `tailscale up --authkey ... --hostname <machine> --accept-routes=false --accept-dns=false`.
+3. **Join**: colony's `ansible/tasks/install-tailscale.yml` (included by `colony provision` when the GS passes
+   `vpn_authkey` or `vpn_join=true`; before branch fleet-design NO playbook included it) installs
+   Tailscale and runs `tailscale up --auth-key file:<key file> --hostname <machine> --accept-routes=false --accept-dns=false`.
    It skips `up` when the rig is already Running (idempotent) and when no key is present yet.
 
 The ground station itself joins the same way with a `tag:fleet-gs` key.

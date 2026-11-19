@@ -25,7 +25,8 @@ etcd_machine      = master
 # The registry (deploy/registry/<target>.yml) is gone: host resolution comes from
 # Mender (the -e ansible_host/port the GS deploy passes) + these constants + the
 # S3 manifest's per-role machine.json. Override any with -e <var>=... .
-s3_endpoint         = {{ lookup('env', 'THEIA_S3_ENDPOINT') | default('http://10.0.0.99:9000', true) }}
+# the fleet host's S3 plane: REQUIRED from the environment (no site default; was dalek 10.0.0.99)
+s3_endpoint         = {{ lookup('env', 'THEIA_S3_ENDPOINT') | mandatory('set THEIA_S3_ENDPOINT=http://<fleet host>:9000') }}
 s3_runtime_bucket   = theia-runtime
 # TIPC publication scope: 'cluster' makes a board's node services reachable across
 # the eth bearer (multi-board). Fleet default; a single-board deploy is harmless.
