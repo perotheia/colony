@@ -1,0 +1,38 @@
+# The opkg-mender test play: the PRODUCTION task files (rig-class, install-mender-opkg, mender-enroll) against
+# the Arago-imitating container. Driven by run.sh, which passes the plane + pins as -e vars.
+- name: "opkg rig: Mender client from the Arago tarball"
+  hosts: opkg-rig
+  gather_facts: true
+  become: false               # docker exec is root already
+  vars:
+    theia_root: /opt/theia
+    machine: opkg-test
+    target: opkg-test-rig
+    _tasks: "{{ playbook_dir }}/../../ansible/tasks"
+  tasks:
+    - name: "Classify the rig"
+      ansible.builtin.include_tasks: "{{ _tasks }}/rig-class.yml"
+
+    - name: "The container classifies as opkg"
+      ansible.builtin.assert:
+        that: rig_class == 'opkg'
+
+    - name: "Install the Mender client (opkg path)"
+      ansible.builtin.include_tasks: "{{ _tasks }}/install-mender-opkg.yml"
+
+    - name: "Enrol (class-agnostic)"
+      ansible.builtin.include_tasks: "{{ _tasks }}/mender-enroll.yml"
+      when: (mender_server_host | default('') | length) > 0
+
+    - name: "TEST: the MANIFEST.sha256 check ran and passed (when the payload was unpacked this run)"
+      ansible.builtin.assert:
+        that:
+          - _mco_manifest.rc == 0
+          - "'usr/bin/mender-update: OK' in _mco_manifest.stdout"
+          - "'usr/bin/mender-auth: OK' in _mco_manifest.stdout"
+          - "'FAILED' not in _mco_manifest.stdout"
+      when: _mco_manifest is not skipped
+
+    - name: "TEST: manifest check status line (run.sh greps it)"
+      ansible.builtin.debug:
+        msg: "MANIFEST_CHECK={{ 'skipped' if _mco_manifest is skipped else ('ok:' ~ (_mco_manifest.stdout_lines | length) ~ '-files') }} STATE={{ _mco_state.stdout }}"
