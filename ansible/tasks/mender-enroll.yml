@@ -84,3 +84,38 @@
   when:
     - ansible_service_mgr == "systemd"
     - _mconf is changed or _mid is changed or _mident is changed
+
+# The GS auto-accepts the rig's pending auth set ONLY when its public key equals the one read here, over the
+# ssh channel colony already trusts (an identity alone can be claimed by anyone who reaches the gateway).
+# mender-authd creates its key on first start: wait for it (60 s), derive the PUBLIC half on the rig (the
+# private key never leaves it) and report it as one line the GS parses from the play log:
+#   COLONY_MENDER_PUBKEY <machine> <base64 of the public-key PEM>
+# No key in time -> no line, and the GS says "accept manually" instead of accepting by identity.
+- name: "Mender: wait for the client's own key (mender-authd creates it on first start)"
+  ansible.builtin.wait_for:
+    path: "{{ mender_agent_key | default('/var/lib/mender/mender-agent.pem') }}"
+    timeout: 60
+  failed_when: false               # a missing key is reported below, it does not fail the provision
+
+- name: "Mender: the client's PUBLIC key (derived on the rig)"
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      openssl pkey -in {{ mender_agent_key | default('/var/lib/mender/mender-agent.pem') | quote }} -pubout
+      | base64 | tr -d '\n'
+    executable: /bin/bash
+  register: _mkey_pub
+  changed_when: false
+  failed_when: false
+
+- name: "COLONY_MENDER_PUBKEY {{ machine }}"
+  ansible.builtin.debug:
+    msg: "COLONY_MENDER_PUBKEY {{ machine }} {{ _mkey_pub.stdout | trim }}"
+  when:
+    - _mkey_pub.rc is defined and _mkey_pub.rc == 0
+    - (_mkey_pub.stdout | default('') | trim | length) > 0
+
+- name: "Mender: no client key to report (the GS will ask for a manual accept)"
+  ansible.builtin.debug:
+    msg: "no Mender client key at {{ mender_agent_key | default('/var/lib/mender/mender-agent.pem') }} after 60 s: {{ _mkey_pub.stderr | default('') | trim }}"
+  when: not (_mkey_pub.rc is defined and _mkey_pub.rc == 0 and (_mkey_pub.stdout | default('') | trim | length) > 0)
