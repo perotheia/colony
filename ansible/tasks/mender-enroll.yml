@@ -13,6 +13,9 @@
     path: /etc/hosts
     regexp: '\s{{ mender_server_host | regex_escape }}(\s|$)'
     line: "{{ mender_server_ip }} {{ mender_server_host }} s3.{{ mender_server_host }}"
+    # a container rig's /etc/hosts is a bind mount (docker): the atomic rename fails with EBUSY there, so fall back
+    # to an in-place write. A board's /etc/hosts is a plain file and still gets the atomic rename.
+    unsafe_writes: true
 
 - name: "Mender: the server certificate (pinned)"
   ansible.builtin.copy:
@@ -98,12 +101,11 @@
   failed_when: false               # a missing key is reported below, it does not fail the provision
 
 - name: "Mender: the client's PUBLIC key (derived on the rig)"
+  # POSIX sh (no bash, no pipefail): an opkg rig need not have bash. openssl failing = no output = no line.
   ansible.builtin.shell:
     cmd: >-
-      set -o pipefail;
-      openssl pkey -in {{ mender_agent_key | default('/var/lib/mender/mender-agent.pem') | quote }} -pubout
-      | base64 | tr -d '\n'
-    executable: /bin/bash
+      pub="$(openssl pkey -in {{ mender_agent_key | default('/var/lib/mender/mender-agent.pem') | quote }} -pubout)"
+      && printf '%s\n' "$pub" | base64 | tr -d '\n'
   register: _mkey_pub
   changed_when: false
   failed_when: false

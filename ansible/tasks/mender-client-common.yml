@@ -1,0 +1,163 @@
+# mender-client-common.yml — the CLASS-AGNOSTIC half of the Mender client install, shared by
+#   install-mender.yml       debian rigs (apt, pinned 5.2.0)
+#   install-mender-opkg.yml  opkg rigs (TI Arago: the cross-built client tarball from the S3 runtime plane)
+# Everything here is plain files + controller-side fetches: no package manager, no distro facts. It assumes the
+# client binaries are installed and /etc/mender + /var/lib/mender exist (each class creates them with its modes).
+#   device identity seed (device_type, artifact_info)
+#   the theia update modules (theia-swp/theia-app/theia-release: POSIX sh, /usr/share/mender/modules/v3)
+#   the Mender→UCM state script
+#   the SWP artifact-verify key (controller-fetched, pushed over ssh; fail closed)
+
+- name: "Seed the Mender device identity (device_type + artifact_info)"
+  # mender install gates on /var/lib/mender/device_type matching the artifact's
+  # compatible-devices, and reads /etc/mender/artifact_info for the current
+  # artifact name. On a server-enrolled rig these come from enrolment; for
+  # standalone OTA we seed them so `mender install` works out of the box. The
+  # device_type is registry-driven (mender_device_type) so a gateway rig enrols
+  # as theia-gateway, not the hardcoded theia-rig.
+  ansible.builtin.copy:
+    dest: "{{ item.path }}"
+    content: "{{ item.content }}\n"
+    mode: "0644"
+  loop:
+    - { path: /var/lib/mender/device_type, content: "device_type={{ mender_device_type | default('theia-rig') }}" }
+    - { path: /etc/mender/artifact_info, content: "artifact_name=unprovisioned" }
+  loop_control:
+    label: "{{ item.path }}"
+
+# The theia update modules (theia-swp/theia-app/theia-release) + the Mender→UCM
+# state scripts are on-device OTA assets colony installs at PROVISION time (the
+# 2-step model: provision = one-time board setup incl. the update modules;
+# orchestrate = per-deploy runtime install). They travel WITH the S3 runtime
+# manifest (theia release --s3 packs platform/runtime/ota/ into manifest.tar.gz →
+# fetch-manifest-s3.yml unpacks it and sets mender_artifacts_dir=<cache>/ota).
+# S3-EXCLUSIVE: this is REQUIRED, not optional — without the modules the Mender
+# client can't run a theia-swp/theia-release artifact (deploys hang pending).
+# The OTA update modules (theia-release/theia-app/theia-swp) install via the
+# SHARED task, so provision + orchestrate stay in lockstep (orchestrate re-installs
+# them too, so an updated module reaches a deployed board — see install-ota-modules.yml).
+- name: "Install the theia Mender update modules (shared task)"
+  ansible.builtin.include_tasks: install-ota-modules.yml
+
+- name: "Ensure the Mender scripts dir"
+  ansible.builtin.file:
+    path: /etc/mender/scripts
+    state: directory
+    mode: "0755"
+
+- name: "Install the Mender→UCM state script + the UCM adopter from the S3 OTA assets"
+  ansible.builtin.copy:
+    src: "{{ mender_artifacts_dir }}/state-scripts/{{ item }}"
+    dest: "/etc/mender/scripts/{{ item }}"
+    mode: "0755"
+  loop:
+    - ArtifactInstall_Leave_01_ucm-request   # the Mender hook (it calls theia-migrate adopt; ucm-adopt.py is gone)
+
+# Tailscale/VPN enrolment is its OWN flow (tools/rig-enroll over com gRPC) — not
+# here. This task only lands the OTA agent + the theia-release customization.
+
+# ── SWP artifact-verify key (app-plane authenticity) ─────────────────────────
+# Pull the PUBLIC verify key from the S3 provisioning plane and point mender.conf
+# at it, so mender-update REFUSES any SWP not signed by the operator's private
+# key (`theia release-swp` signs; `theia cert copy` uploaded this public half).
+# Fail-CLOSED: with the key present, unsigned/forged artifacts are rejected
+# UPSTREAM of the theia-swp module. The key is NEVER baked into the image or
+# committed — the operator regenerates the pair per deployment (`theia cert
+# generate`). NO-OP without an S3 endpoint (a local/dev provision).
+- name: "SWP verify key: S3 provisioning plane configured?"
+  ansible.builtin.set_fact:
+    _swp_verify_key: "{{ (s3_endpoint | default('') | length) > 0 }}"
+
+# PER-DEVICE key first (the opt-in override the GS pins via the Fleet UI and
+# mirrors to provisioning/by-name/<name>.pem), then the FLEET key. `target` is the
+# device/machine name colony provisions (== the GS device name). A 404 on the
+# per-device key is expected (most rigs use the fleet key) — status_code tolerates
+# it so we fall through.
+# The key is fetched by the CONTROLLER (its own path to the S3 plane) and PUSHED over ssh: the trust anchor of
+# every later OTA never travels the rig's network path (hardening C4). No key = the provision FAILS (H4), unless
+# allow_unverified_ota=true is passed on purpose (a lab rig).
+- name: "SWP verify key: controller fetches this rig's PER-DEVICE key (by name), if any"
+  ansible.builtin.uri:
+    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/by-name/{{ target }}.pem"
+    return_content: true
+    status_code: [200, 403, 404]
+  register: _per_device_key
+  delegate_to: localhost
+  become: false
+  when: _swp_verify_key | bool
+
+- name: "SWP verify key: controller fetches the FLEET key"
+  ansible.builtin.uri:
+    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/artifact-verify-key.pem"
+    return_content: true
+    status_code: [200, 403, 404]
+  register: _fleet_key
+  delegate_to: localhost
+  become: false
+  when:
+    - _swp_verify_key | bool
+    - (_per_device_key.status | default(0)) != 200
+
+- name: "SWP verify key: the key to install"
+  ansible.builtin.set_fact:
+    _verify_pem: "{{ _per_device_key.content if (_per_device_key.status | default(0)) == 200 else (_fleet_key.content | default('') if (_fleet_key.status | default(0)) == 200 else '') }}"
+
+- name: "SWP verify key: REFUSE to provision a rig that could not verify its OTA"
+  ansible.builtin.assert:
+    that: "'BEGIN PUBLIC KEY' in _verify_pem or (allow_unverified_ota | default(false) | bool)"
+    fail_msg: >-
+      no artifact verify key for {{ target }} in the provisioning plane
+      ({{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/artifact-verify-key.pem): publish it
+      (theia release-swp --s3 writes it) or pass allow_unverified_ota=true for a lab rig
+
+- name: "SWP verify key: push it to the rig"
+  ansible.builtin.copy:
+    dest: /etc/mender/artifact-verify-key.pem
+    content: "{{ _verify_pem }}"
+    mode: "0644"
+  when: "'BEGIN PUBLIC KEY' in _verify_pem"
+
+- name: "SWP verify key: which key landed?"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'PER-DEVICE verify key (by-name/' ~ target ~ '.pem)'
+         if (_per_device_key.status | default(0)) == 200
+         else 'FLEET verify key (provisioning/artifact-verify-key.pem)' }}
+  when: _swp_verify_key | bool
+
+# mender.conf is written LATER by mender-enroll.yml (the whole file, ArtifactVerifyKey ALWAYS set). At this point
+# the file may not exist yet, so only patch it when present (a rig whose conf is baked/pre-written, or a re-run);
+# never CREATE a partial conf here. (opkg rigs seed a fail-closed conf after this file: install-mender-opkg.yml.)
+- name: "SWP verify key: mender.conf present?"
+  ansible.builtin.stat:
+    path: /etc/mender/mender.conf
+  register: _mender_conf
+  when: _swp_verify_key | bool
+
+# JSON-aware, not lineinfile: mender-enroll.yml's conf comes out of the templated copy as ONE line of compact JSON,
+# and a line edit keyed on "ArtifactVerifyKey" replaced that whole line (every re-provision broke the conf, then
+# enroll rewrote it and restarted the client). Only written when the key is missing or points elsewhere.
+- name: "SWP verify key: read mender.conf (if it exists)"
+  ansible.builtin.slurp:
+    path: /etc/mender/mender.conf
+  register: _mender_conf_raw
+  when:
+    - _swp_verify_key | bool
+    - _mender_conf.stat.exists | default(false)
+
+- name: "SWP verify key: ensure mender.conf sets ArtifactVerifyKey (if conf exists)"
+  ansible.builtin.copy:
+    dest: /etc/mender/mender.conf
+    mode: "0600"
+    content: "{{ (_mender_conf_raw.content | b64decode | from_json) | combine({'ArtifactVerifyKey': '/etc/mender/artifact-verify-key.pem'}) | to_nice_json(indent=2) }}\n"
+  when:
+    - _swp_verify_key | bool
+    - _mender_conf.stat.exists | default(false)
+    - (_mender_conf_raw.content | b64decode | from_json).ArtifactVerifyKey | default('') != '/etc/mender/artifact-verify-key.pem'
+
+- name: "SWP verify key: report"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'ArtifactVerifyKey installed — this rig REFUSES unsigned/forged SWPs'
+         if _swp_verify_key | bool
+         else 'no S3 endpoint — verify key NOT installed (dev provision)' }}
