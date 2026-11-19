@@ -6,9 +6,11 @@ not by user accounts: a device's tag is fixed by the pre-authorised auth key it 
 
 | Tag | Who | May reach |
 | --- | --- | --- |
-| `tag:fleet-gs` | ground station + provisioning server (colony, Mender GW) | every rig, all ports (ssh for Ansible, com gRPC :7700, Mender, MAVLink) |
-| `tag:fleet-rig` | every rig (BeagleBone AI-64, SK-TDA4VM, ...) | the GS only: `tcp:443` (Mender), `udp:14550-14560` (MAVLink); **never another rig** |
-| tailnet members | operators' machines | everything (dev access) |
+| `tag:fleet-gs` | ground station + provisioning server (colony, Mender GW, S3 behind the GW) | rigs: `tcp:22` (Ansible), `tcp:7700` (com gRPC) |
+| `tag:fleet-rig` | every rig (BeagleBone AI-64, SK-TDA4VM, ...) | the GS only, `tcp:443` (Mender + the S3 plane over TLS); **never another rig**, never the GS's ssh / web / plain S3 |
+| tailnet members | operators' machines | their own devices; the GS on `tcp:22,443,8088`; rigs on `tcp:22` only |
+
+MAVLink (`udp:14550-14560`) is not granted until its trust-boundary design exists (perotheia-hardening C5).
 
 The policy is versioned here: [`tailscale-fleet-policy.hujson`](tailscale-fleet-policy.hujson). Both tags are
 owned by `autogroup:admin` (`tagOwners`), so only tailnet admins (and API tokens they create) can mint

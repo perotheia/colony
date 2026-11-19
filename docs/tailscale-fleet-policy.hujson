@@ -9,14 +9,19 @@
 	},
 
 	"grants": [
-		// Operators (tailnet members, e.g. dev laptops) reach everything in the fleet tailnet.
-		{"src": ["autogroup:member"], "dst": ["*"], "ip": ["*"]},
+		// operators (tailnet members; group:fleet-ops later): their own devices, the GS (ssh, the Mender GUI/API +
+		// the S3 plane on :443, gs-web), and ssh + ping to rigs. Nothing else on a rig: com gRPC (7700), DoIP
+		// (13400), etcd are NOT reachable from an operator's laptop (hardening H9).
+		{"src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"]},
+		{"src": ["autogroup:member"], "dst": ["tag:fleet-gs"],  "ip": ["tcp:22", "tcp:443", "tcp:8088", "icmp:*"]},
+		{"src": ["autogroup:member"], "dst": ["tag:fleet-rig"], "ip": ["tcp:22", "icmp:*"]},
 
-		// Ground station / provisioning server -> rigs: ssh (colony Ansible), com gRPC (rig_enroll Provision), any rig service.
-		{"src": ["tag:fleet-gs"], "dst": ["tag:fleet-rig"], "ip": ["*"]},
+		// the GS provisions (ssh) and observes (com gRPC) the rigs
+		{"src": ["tag:fleet-gs"], "dst": ["tag:fleet-rig"], "ip": ["tcp:22", "tcp:7700", "icmp:*"]},
 
-		// Rigs -> ground station only: Mender server (HTTPS), MAVLink telemetry (UDP 14550-14560).
-		{"src": ["tag:fleet-rig"], "dst": ["tag:fleet-gs"], "ip": ["tcp:443", "udp:14550-14560"]},
+		// a rig reaches the GS on TLS only (Mender + the S3 plane behind the gateway); never another rig.
+		// MAVLink (udp:14550-14560) is NOT granted: no design uses it yet (hardening C5); add it with that design.
+		{"src": ["tag:fleet-rig"], "dst": ["tag:fleet-gs"], "ip": ["tcp:443"]},
 	],
 
 	"ssh": [
@@ -24,12 +29,12 @@
 			"action": "check",
 			"src":    ["autogroup:member"],
 			"dst":    ["autogroup:self"],
-			"users":  ["autogroup:nonroot", "root"],
+			"users":  ["autogroup:nonroot"],
 		},
 	],
 
 	"tests": [
-		{"src": "tag:fleet-gs",  "accept": ["tag:fleet-rig:22", "tag:fleet-rig:7700"]},
-		{"src": "tag:fleet-rig", "accept": ["tag:fleet-gs:443"], "deny": ["tag:fleet-gs:22", "tag:fleet-rig:22"]},
+		{"src": "tag:fleet-gs",  "accept": ["tag:fleet-rig:22", "tag:fleet-rig:7700"], "deny": ["tag:fleet-rig:13400", "tag:fleet-rig:2379"]},
+		{"src": "tag:fleet-rig", "accept": ["tag:fleet-gs:443"], "deny": ["tag:fleet-gs:22", "tag:fleet-gs:9000", "tag:fleet-gs:8088", "tag:fleet-rig:22"]},
 	],
 }
