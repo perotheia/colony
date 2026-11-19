@@ -37,6 +37,8 @@ s3_runtime_bucket   = theia-runtime
 mender_server_host  = {{ lookup('env', 'MENDER_SERVER_HOST') }}
 mender_server_ip    = {{ lookup('env', 'MENDER_SERVER_IP') }}
 mender_server_ca    = {{ lookup('env', 'MENDER_SERVER_CA') }}
+# the GS's fleet-PKI signer as the CONTROLLER reaches it (empty = no per-device certificates)
+gs_pki_url          = {{ lookup('env', 'GS_PKI_URL') }}
 tipc_scope          = cluster
 # etcd lives on the MASTER only; DMZ-clean → bind loopback (the shared etcd is
 # reached over TIPC, not a routable etcd port). Workers set etcd_external.

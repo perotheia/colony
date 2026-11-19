@@ -1,0 +1,72 @@
+# pki-enroll.yml — the rig's OWN key pair and its fleet certificate (hardening C2/C3; design: per-device PKI).
+# The key is generated ON the rig and never leaves it; the controller carries the CSR to the GS signer and
+# brings the certificate back over the ssh channel it already trusts. Runs at provision and at every
+# orchestrate (renewal: certificates live 90 days). Skipped when no signer is configured (gs_pki_url empty).
+#   /etc/theia/pki/device.key   0640 root:<theia group if it exists>   (never read by the controller)
+#   /etc/theia/pki/device.crt   CN = the rig's device id, SAN URI theia:rig:<id>, clientAuth + serverAuth
+#   /etc/theia/pki/ca.crt       the fleet CA
+- name: "PKI: the rig's device id"
+  ansible.builtin.set_fact:
+    _pki_id: "{{ mender_device_id | default(inventory_hostname) }}"
+
+- name: "PKI: directory"
+  ansible.builtin.file:
+    path: /etc/theia/pki
+    state: directory
+    mode: "0750"
+
+- name: "PKI: generate the device key ON the rig (once)"
+  ansible.builtin.shell:
+    cmd: "umask 077 && openssl ecparam -genkey -name prime256v1 -noout -out /etc/theia/pki/device.key"
+    creates: /etc/theia/pki/device.key
+
+- name: "PKI: certificate request (proof of the key; the key stays on the rig)"
+  ansible.builtin.command:
+    cmd: "openssl req -new -key /etc/theia/pki/device.key -subj '/CN={{ _pki_id }}/O=perotheia fleet'"
+  register: _pki_csr
+  changed_when: false
+
+- name: "PKI: the controller asks the GS signer"
+  ansible.builtin.uri:
+    url: "{{ gs_pki_url }}/api/pki/sign"
+    method: POST
+    body_format: json
+    body:
+      device_id: "{{ _pki_id }}"
+      csr_pem: "{{ _pki_csr.stdout }}"
+      role: rig
+    headers:
+      X-GS-Key: "{{ lookup('env', 'GS_API_KEY') }}"
+    return_content: true
+  register: _pki_signed
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: "PKI: install the certificate and the fleet CA"
+  ansible.builtin.copy:
+    dest: "/etc/theia/pki/{{ item.name }}"
+    content: "{{ item.pem }}"
+    mode: "0644"
+  loop:
+    - { name: device.crt, pem: "{{ _pki_signed.json.cert_pem }}" }
+    - { name: ca.crt, pem: "{{ _pki_signed.json.ca_pem }}" }
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: "PKI: the certificate matches the key and chains to the fleet CA"
+  ansible.builtin.shell:
+    cmd: >-
+      openssl verify -CAfile /etc/theia/pki/ca.crt /etc/theia/pki/device.crt &&
+      [ "$(openssl x509 -in /etc/theia/pki/device.crt -noout -pubkey | openssl sha256)" =
+        "$(openssl pkey -in /etc/theia/pki/device.key -pubout | openssl sha256)" ]
+  changed_when: false
+
+- name: "PKI: the runtime user may read the key (when the theia group exists)"
+  ansible.builtin.shell:
+    cmd: "getent group theia >/dev/null && chgrp -R theia /etc/theia/pki && chmod 0640 /etc/theia/pki/device.key || true"
+  changed_when: false
+
+- name: "PKI: report"
+  ansible.builtin.debug:
+    msg: "COLONY_PKI {{ _pki_id }} serial {{ _pki_signed.json.serial }} until {{ _pki_signed.json.not_after }}"

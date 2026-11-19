@@ -137,6 +137,10 @@
     # (not only at provision) — so an updated theia-swp/theia-release module reaches
     # an already-provisioned board on the next deploy. mender_artifacts_dir is set
     # by fetch-manifest-s3.yml above. Idempotent + cheap.
+    - name: "Include the per-device PKI (renewal at every deploy)"
+      ansible.builtin.include_tasks: tasks/pki-enroll.yml
+      when: (gs_pki_url | default('') | length) > 0
+
     - name: "Include OTA update-module (re)install"
       ansible.builtin.include_tasks: tasks/install-ota-modules.yml
 

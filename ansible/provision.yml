@@ -153,6 +153,10 @@
         rig_skips: "{{ rig_skips + ['mender client (app-plane OTA)'] }}"
       when: rig_class != 'debian'
 
+    - name: "Include the per-device PKI (own key on the rig, certificate from the GS signer)"
+      ansible.builtin.include_tasks: tasks/pki-enroll.yml
+      when: (gs_pki_url | default('') | length) > 0
+
     # The fleet VPN join (docs/fleet-vpn.md): runs when the GS passed a key (vpn_authkey) or asked for it
     # (vpn_join=true with a key already on the rig). Both rig classes (apt script / pinned static build).
     - name: "Include the fleet VPN join (Tailscale)"
