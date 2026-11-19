@@ -30,6 +30,10 @@ s3_endpoint         = {{ lookup('env', 'THEIA_S3_ENDPOINT', default=Undefined) |
 s3_runtime_bucket   = theia-runtime
 # TIPC publication scope: 'cluster' makes a board's node services reachable across
 # the eth bearer (multi-board). Fleet default; a single-board deploy is harmless.
+# the fleet's Mender server as the RIGS reach it (empty host = provision leaves the client unconfigured)
+mender_server_host  = {{ lookup('env', 'MENDER_SERVER_HOST') }}
+mender_server_ip    = {{ lookup('env', 'MENDER_SERVER_IP') }}
+mender_server_ca    = {{ lookup('env', 'MENDER_SERVER_CA') }}
 tipc_scope          = cluster
 # etcd lives on the MASTER only; DMZ-clean → bind loopback (the shared etcd is
 # reached over TIPC, not a routable etcd port). Workers set etcd_external.

@@ -1,0 +1,86 @@
+# mender-enroll.yml — configure the Mender client so the rig checks in with the fleet's Mender server: the part
+# that was the hand-run ground-station/mender/server/enroll-rig.sh. Included by provision on debian rigs when the
+# controller knows the server (mender_server_host set). After it the rig appears PENDING in the GS; the operator
+# accepts it there (Connect), or it is auto-accepted when it was pre-authorised with this identity + its key.
+#   mender_server_host   the name on the server's certificate (upstream compose: docker.mender.io)
+#   mender_server_ip     the address the rig reaches the server at (the GS's fleet-tailnet address)
+#   mender_server_ca     CONTROLLER path of the server's CA / certificate (public)
+#   mender_device_id     the rig's Mender identity value (identity key `device_id`); default: the rig's name
+# ArtifactVerifyKey is ALWAYS set: a rig without the key file refuses every artifact (fail closed), instead of
+# silently accepting unsigned ones (enroll-rig.sh wrote the setting only when the file already existed).
+- name: "Mender: server name -> address in /etc/hosts"
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ mender_server_host | regex_escape }}(\s|$)'
+    line: "{{ mender_server_ip }} {{ mender_server_host }} s3.{{ mender_server_host }}"
+
+- name: "Mender: the server certificate (pinned)"
+  ansible.builtin.copy:
+    src: "{{ mender_server_ca }}"
+    dest: /etc/mender/server.crt
+    mode: "0644"
+
+- name: "Mender: mender.conf"
+  ansible.builtin.copy:
+    dest: /etc/mender/mender.conf
+    mode: "0600"
+    content: |
+      {
+        "ServerURL": "https://{{ mender_server_host }}",
+        "ServerCertificate": "/etc/mender/server.crt",
+        "ArtifactVerifyKey": "/etc/mender/artifact-verify-key.pem",
+        "TenantToken": "",
+        "InventoryPollIntervalSeconds": {{ mender_poll_s | default(30) }},
+        "UpdatePollIntervalSeconds": {{ mender_poll_s | default(30) }},
+        "RetryPollIntervalSeconds": {{ mender_poll_s | default(30) }}
+      }
+  register: _mconf
+
+- name: "Mender: the rig's identity value"
+  ansible.builtin.copy:
+    dest: /etc/mender/device-id
+    mode: "0644"
+    content: "{{ mender_device_id | default(inventory_hostname) }}\n"
+  register: _mid
+
+- name: "Mender: identity + inventory script dirs"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /usr/share/mender/identity
+    - /usr/share/mender/inventory
+
+- name: "Mender: identity script (identity key = device_id, the key the GS pre-authorises and accepts by)"
+  ansible.builtin.copy:
+    dest: /usr/share/mender/identity/mender-device-identity
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      did="$(cat /etc/mender/device-id 2>/dev/null)"
+      [ -n "$did" ] || did="$(cat /sys/class/net/eth0/address 2>/dev/null)"
+      echo "device_id=$did"
+  register: _mident
+
+- name: "Mender: inventory script"
+  ansible.builtin.copy:
+    dest: /usr/share/mender/inventory/mender-inventory-theia
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "device_type=theia-rig"
+      echo "hostname=$(hostname)"
+      echo "kernel=$(uname -r)"
+
+- name: "Mender: restart the client on a config change (systemd rigs)"
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+    enabled: true
+  loop:
+    - mender-authd
+    - mender-updated
+  when:
+    - ansible_service_mgr == "systemd"
+    - _mconf is changed or _mid is changed or _mident is changed

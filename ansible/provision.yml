@@ -142,6 +142,12 @@
       ansible.builtin.include_tasks: tasks/install-mender.yml
       when: rig_class == 'debian'
 
+    - name: "Include Mender enrollment (server, CA, identity): the rig checks in PENDING"
+      ansible.builtin.include_tasks: tasks/mender-enroll.yml
+      when:
+        - rig_class == 'debian'
+        - (mender_server_host | default('') | length) > 0
+
     - name: "NAMED SKIP (opkg rig): Mender client (no Arago package: base plane only, no OTA)"
       ansible.builtin.set_fact:
         rig_skips: "{{ rig_skips + ['mender client (app-plane OTA)'] }}"
