@@ -51,18 +51,34 @@
   loop_control:
     label: "{{ item.file | basename }}"
 
+- name: "Runtime package versions BEFORE (debian rigs)"
+  ansible.builtin.command: dpkg-query -W -f='${Package}=${Version}\n' theia-runtime theia-services
+  register: _rt_before
+  changed_when: false
+  failed_when: false
+  when: (rig_class | default('debian')) == 'debian'
+
 - name: "Install runtime + services with their dependencies (debian rigs: apt on the local .debs, no upgrades)"
   # apt (not bare dpkg) so the packages' Depends (e.g. libprotobuf32t64 on trixie) are resolved; nothing else
   # on the rig is upgraded (--no-upgrade applies to already-installed packages named on the line: none are).
   ansible.builtin.command:
     cmd: >-
-      apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-overwrite
+      apt-get install -y --no-install-recommends --allow-downgrades -o Dpkg::Options::=--force-overwrite
       {{ _runtime_debs | map(attribute='file') | map('basename') | map('regex_replace', '^', theia_root + '/ipk/') | join(' ') }}
   environment:
     PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     DEBIAN_FRONTEND: noninteractive
-  register: _dpkg
-  changed_when: _dpkg.rc == 0
+  # --allow-downgrades: the operator picks the runtime version; going back (0.3.1 -> 0.3.0) is a deploy too.
+  # changed only when apt really installed/upgraded/downgraded something: the same version again must not
+  # restart the running stack.
+  register: _dpkg_deb
+  changed_when: false          # decided below by comparing the installed versions (apt's summary text varies)
+  when: (rig_class | default('debian')) == 'debian'
+
+- name: "Runtime package versions AFTER (debian rigs)"
+  ansible.builtin.command: dpkg-query -W -f='${Package}=${Version}\n' theia-runtime theia-services
+  register: _rt_after
+  changed_when: (_rt_before.stdout | default('')) != _rt_after.stdout
   when: (rig_class | default('debian')) == 'debian'
 
 - name: "Install runtime + services by UNPACKING the packages (opkg rigs: no dpkg; maintainer scripts not run)"
@@ -72,5 +88,12 @@
     cmd: >-
       set -e; for d in {{ _runtime_debs | map(attribute='file') | map('basename') | map('regex_replace', '^', theia_root + '/ipk/') | join(' ') }}; do
       t=$(mktemp -d); (cd "$t" && ar x "$d" && tar -xf data.tar.* -C /); rm -rf "$t"; done
-  register: _dpkg
+  register: _dpkg_opkg
   when: (rig_class | default('debian')) == 'opkg'
+
+# ONE fact for "the runtime binaries changed" (the supervisor restarts on it). Two tasks registering the same
+# name was a bug: the SKIPPED one ran last and overwrote the other's result with changed=false, so a real
+# upgrade never restarted the stack (live UI test 2026-11-19: 0.3.1 installed, 0.3.0 processes kept running).
+- name: "Runtime binaries changed?"
+  ansible.builtin.set_fact:
+    _runtime_changed: "{{ (_rt_after is defined and _rt_after is changed) or (_dpkg_opkg is defined and _dpkg_opkg is changed) }}"

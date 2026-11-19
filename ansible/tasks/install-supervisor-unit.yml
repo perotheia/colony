@@ -44,7 +44,7 @@
   # reload handler only re-reads the manifest, not the binaries.
   ansible.builtin.systemd:
     name: theia-supervisor.service
-    state: "{{ 'restarted' if (_unit.changed or (_dpkg is defined and _dpkg.changed)) else 'started' }}"
+    state: "{{ 'restarted' if (_unit.changed or (_runtime_changed | default(false) | bool)) else 'started' }}"
   when: ansible_service_mgr == "systemd"
 
 - name: "Start the supervisor directly (NO systemd — e.g. a container rig)"

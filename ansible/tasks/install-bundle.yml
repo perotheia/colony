@@ -18,3 +18,7 @@
     PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   register: _dpkg
   changed_when: _dpkg.rc == 0
+
+- name: "Runtime binaries changed?"
+  ansible.builtin.set_fact:
+    _runtime_changed: "{{ _dpkg is changed }}"
