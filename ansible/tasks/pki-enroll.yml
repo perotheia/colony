@@ -58,8 +58,9 @@
   ansible.builtin.shell:
     cmd: >-
       openssl verify -CAfile /etc/theia/pki/ca.crt /etc/theia/pki/device.crt &&
-      [ "$(openssl x509 -in /etc/theia/pki/device.crt -noout -pubkey | openssl sha256)" =
-        "$(openssl pkey -in /etc/theia/pki/device.key -pubout | openssl sha256)" ]
+      a="$(openssl x509 -in /etc/theia/pki/device.crt -noout -pubkey | openssl sha256)" &&
+      b="$(openssl pkey -in /etc/theia/pki/device.key -pubout | openssl sha256)" &&
+      [ "$a" = "$b" ]
   changed_when: false
 
 - name: "PKI: the runtime user may read the key (when the theia group exists)"
