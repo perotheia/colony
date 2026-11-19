@@ -14,6 +14,8 @@
 #        d. a wrong pinned sha256 fails the play (the controller's index check)
 #        e. a tampered installed binary is detected and repaired, then the next run is idle again
 #        f. a swapped object in the plane (index + pin intact) fails the play at the rig's sha256 check
+#        g. an index whose `file` carries shell metacharacters (pinned sha256 intact) fails the play at the index
+#           check, before any shell task runs on the rig (review 2026-11-19: it reached a root shell)
 #   4. removes every container / network / image it created
 #
 # Usage: test/opkg-mender/run.sh [--keep]
@@ -202,6 +204,27 @@ if play "$WORK/run-swapped.log" "${TESTVAR[@]}"; then bad "swapped object accept
   check "the bad download was deleted" rig '! ls /var/tmp/mender-client-arago.tar.gz* >/dev/null 2>&1'
 fi
 cp "$WORK/obj.orig" "$OBJ"
+
+# ── 3g. a malicious `file` in the index fails before any shell runs on the rig ───────────────────────────────────────
+echo "[3g] malicious file name in the index"
+IDX="$PLANE/theia-runtime/mender-client/$VER/index.json"
+cp "$IDX" "$WORK/index.orig"
+python3 - "$IDX" "$VER" <<'PY'
+import json, sys
+p, ver = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+# prefix + sha256 kept: only the name is bad. $(...) runs even inside the old double quotes, before curl fails
+d["file"] = f'mender-client/{ver}/x$(touch /tmp/pwned-index)";touch /tmp/pwned-index;echo "'
+json.dump(d, open(p, "w"))
+PY
+rig 'rm -f /tmp/pwned-index /usr/share/mender-client-arago/.colony-installed'
+if play "$WORK/run-badfile.log" "${TESTVAR[@]}"; then bad "malicious index file accepted"; else
+  check "refused at the index check" grep -q 'is not a plain object key' "$WORK/run-badfile.log"
+  check "no shell task ran after the index check" bash -c "! grep -qE 'TASK \[Mender opkg: (is this build|fetch the tarball|unpack)' '$WORK/run-badfile.log'"
+  check "nothing executed on the rig" rig '! test -e /tmp/pwned-index'
+  check "no download on the rig" rig '! ls /var/tmp/mender-client-arago.tar.gz* >/dev/null 2>&1'
+fi
+cp "$WORK/index.orig" "$IDX"
 
 echo "[done] PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = 0 ] || { echo "logs: $WORK (kept with --keep)"; exit 1; }
