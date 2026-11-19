@@ -20,14 +20,15 @@
   become: true
   failed_when: false   # offline rig → fall back to the distro package below
 
-- name: "Add the Mender apt repo ({{ ansible_distribution | lower }}/{{ ansible_distribution_release }})"
+- name: "Add the Mender apt repo (device-components: {{ ansible_distribution | lower }}/{{ ansible_distribution_release }})"
+  # Mender moved its packages to repos/device-components; the old repos/debian has no trixie (403), which
+  # this task used to swallow: the rig then had NO client and the play stayed green.
   ansible.builtin.apt_repository:
-    repo: "deb [arch={{ deb_arch | default('arm64') }}] https://downloads.mender.io/repos/debian {{ ansible_distribution | lower }}/{{ ansible_distribution_release }}/stable main"
+    repo: "deb [arch={{ deb_arch | default('arm64') }}] https://downloads.mender.io/repos/device-components {{ ansible_distribution | lower }}/{{ ansible_distribution_release }}/stable main"
     filename: mender
     state: present
     update_cache: true
   become: true
-  failed_when: false
 
 # Retire the legacy mender-client: it conflicts with mender-auth (dpkg "conflicts
 # with mender-client"), so leaving it installed makes the 4.x install fail. Purge
@@ -40,15 +41,19 @@
   become: true
   failed_when: false
 
-- name: "Install the 4.x Mender client (mender-update + mender-auth)"
+- name: "Install the Mender client, PINNED (mender-update + mender-auth {{ mender_client_version | default('5.2.0') }})"
   ansible.builtin.apt:
     name:
-      - mender-update
-      - mender-auth
+      - "mender-update={{ mender_client_version | default('5.2.0') }}-1+{{ ansible_distribution | lower }}+{{ ansible_distribution_release }}"
+      - "mender-auth={{ mender_client_version | default('5.2.0') }}-1+{{ ansible_distribution | lower }}+{{ ansible_distribution_release }}"
     state: present
     update_cache: true
-  failed_when: false          # offline rig (no repo reach) — tolerate; enroll-rig.sh seeds the debs
+    install_recommends: false
   register: _mender_apt
+
+- name: "The Mender client is really there"
+  ansible.builtin.command: mender-update --version
+  changed_when: false
 
 - name: "Ensure the Mender state dirs"
   ansible.builtin.file:
@@ -102,8 +107,7 @@
     dest: "/etc/mender/scripts/{{ item }}"
     mode: "0755"
   loop:
-    - ArtifactInstall_Leave_01_ucm-request   # the Mender hook
-    - ucm-adopt.py                            # hands the landed release to UCM
+    - ArtifactInstall_Leave_01_ucm-request   # the Mender hook (it calls theia-migrate adopt; ucm-adopt.py is gone)
 
 # Tailscale/VPN enrolment is its OWN flow (tools/rig-enroll over com gRPC) — not
 # here. This task only lands the OTA agent + the theia-release customization.
