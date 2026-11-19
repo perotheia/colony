@@ -27,6 +27,9 @@ etcd_machine      = master
 # S3 manifest's per-role machine.json. Override any with -e <var>=... .
 # the fleet host's S3 plane: REQUIRED from the environment (no site default; was dalek 10.0.0.99)
 s3_endpoint         = {{ lookup('env', 'THEIA_S3_ENDPOINT', default=Undefined) | mandatory('set THEIA_S3_ENDPOINT=http://<fleet host>:9000') }}
+# the same plane as the RIGS reach it (TLS through the gateway) + the CA they check it with; empty = s3_endpoint
+s3_rig_endpoint     = {{ lookup('env', 'THEIA_S3_RIG_ENDPOINT') }}
+s3_rig_ca           = {{ lookup('env', 'THEIA_S3_RIG_CA') }}
 s3_runtime_bucket   = theia-runtime
 # TIPC publication scope: 'cluster' makes a board's node services reachable across
 # the eth bearer (multi-board). Fleet default; a single-board deploy is harmless.

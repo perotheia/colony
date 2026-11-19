@@ -27,6 +27,8 @@
     url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/{{ runtime_version }}/index.json"
     return_content: true
   register: _runtime_index
+  delegate_to: localhost      # the CONTROLLER reads the index over its own (internal) path to the S3 plane, so the
+  become: false               # sha256 list never travels the rig's network path: a swapped .deb fails its checksum
 
 - name: "Resolve the deb object list from the index"
   ansible.builtin.set_fact:
@@ -34,9 +36,11 @@
 
 - name: "Fetch runtime + services .debs from S3 (sha256-checked)"
   ansible.builtin.get_url:
-    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/{{ item.file }}"
+    # the RIG pulls the (large) packages itself, over TLS when s3_rig_endpoint is https (pinned gateway cert)
+    url: "{{ s3_rig_endpoint | default(s3_endpoint, true) }}/{{ s3_runtime_bucket | default('theia-runtime') }}/{{ item.file }}"
     dest: "{{ theia_root }}/ipk/{{ item.file | basename }}"
     checksum: "sha256:{{ item.sha256 }}"
+    ca_path: "{{ s3_rig_ca | default(omit, true) }}"
     mode: "0644"
   loop: "{{ _runtime_debs }}"
   loop_control:

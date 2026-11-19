@@ -125,31 +125,55 @@
 # device/machine name colony provisions (== the GS device name). A 404 on the
 # per-device key is expected (most rigs use the fleet key) — status_code tolerates
 # it so we fall through.
-- name: "SWP verify key: try this rig's PER-DEVICE key (by name)"
-  ansible.builtin.get_url:
+# The key is fetched by the CONTROLLER (its own path to the S3 plane) and PUSHED over ssh: the trust anchor of
+# every later OTA never travels the rig's network path (hardening C4). No key = the provision FAILS (H4), unless
+# allow_unverified_ota=true is passed on purpose (a lab rig).
+- name: "SWP verify key: controller fetches this rig's PER-DEVICE key (by name), if any"
+  ansible.builtin.uri:
     url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/by-name/{{ target }}.pem"
-    dest: /etc/mender/artifact-verify-key.pem
-    mode: "0644"
-    force: true
+    return_content: true
+    status_code: [200, 403, 404]
   register: _per_device_key
-  failed_when: false        # 404 = no per-device override; fall back below
+  delegate_to: localhost
+  become: false
   when: _swp_verify_key | bool
 
-- name: "SWP verify key: fall back to the FLEET key when no per-device key"
-  ansible.builtin.get_url:
+- name: "SWP verify key: controller fetches the FLEET key"
+  ansible.builtin.uri:
     url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/artifact-verify-key.pem"
-    dest: /etc/mender/artifact-verify-key.pem
-    mode: "0644"
-    force: true            # always refresh — a rotated key must land
+    return_content: true
+    status_code: [200, 403, 404]
+  register: _fleet_key
+  delegate_to: localhost
+  become: false
   when:
     - _swp_verify_key | bool
-    - (_per_device_key.status_code | default(0)) != 200
+    - (_per_device_key.status | default(0)) != 200
+
+- name: "SWP verify key: the key to install"
+  ansible.builtin.set_fact:
+    _verify_pem: "{{ _per_device_key.content if (_per_device_key.status | default(0)) == 200 else (_fleet_key.content | default('') if (_fleet_key.status | default(0)) == 200 else '') }}"
+
+- name: "SWP verify key: REFUSE to provision a rig that could not verify its OTA"
+  ansible.builtin.assert:
+    that: "'BEGIN PUBLIC KEY' in _verify_pem or (allow_unverified_ota | default(false) | bool)"
+    fail_msg: >-
+      no artifact verify key for {{ target }} in the provisioning plane
+      ({{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/artifact-verify-key.pem): publish it
+      (theia release-swp --s3 writes it) or pass allow_unverified_ota=true for a lab rig
+
+- name: "SWP verify key: push it to the rig"
+  ansible.builtin.copy:
+    dest: /etc/mender/artifact-verify-key.pem
+    content: "{{ _verify_pem }}"
+    mode: "0644"
+  when: "'BEGIN PUBLIC KEY' in _verify_pem"
 
 - name: "SWP verify key: which key landed?"
   ansible.builtin.debug:
     msg: >-
       {{ 'PER-DEVICE verify key (by-name/' ~ target ~ '.pem)'
-         if (_per_device_key.status_code | default(0)) == 200
+         if (_per_device_key.status | default(0)) == 200
          else 'FLEET verify key (provisioning/artifact-verify-key.pem)' }}
   when: _swp_verify_key | bool
 
