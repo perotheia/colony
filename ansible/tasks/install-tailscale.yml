@@ -57,6 +57,13 @@
 # The key arrives as the deployment secret `vpn_authkey` (the GS mints it per rig: single-use, pre-authorised,
 # tag:fleet-rig, short-lived) or is already on the rig (com Provision / out-of-band). It is written 0600, used
 # through `--auth-key file:` (never on a command line) and removed after the join.
+- name: "Directory for the per-rig VPN auth key (0700)"
+  ansible.builtin.file:
+    path: "{{ (vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey')) | dirname }}"
+    state: directory
+    mode: "0700"
+  when: vpn_authkey is defined and vpn_authkey | length > 0
+
 - name: "Write the per-rig VPN auth key (deployment secret)"
   ansible.builtin.copy:
     dest: "{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}"
@@ -65,11 +72,10 @@
   no_log: true
   when: vpn_authkey is defined and vpn_authkey | length > 0
 
-- name: "Read the per-rig VPN auth key"
-  ansible.builtin.slurp:
-    src: "{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}"
+- name: "Is a per-rig VPN auth key present? (stat only: the key is never read into a variable)"
+  ansible.builtin.stat:
+    path: "{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}"
   register: _authkey
-  failed_when: false            # no key yet → skip `up` (enroll first)
 
 - name: "Query current tailscale backend state (idempotency guard)"
   ansible.builtin.command: "tailscale status --json"
@@ -77,30 +83,29 @@
   changed_when: false
   failed_when: false
 
+- name: "Already on the tailnet?"
+  ansible.builtin.set_fact:
+    _ts_running: "{{ '\"BackendState\": \"Running\"' in (_ts_status.stdout | default('')) or '\"BackendState\":\"Running\"' in (_ts_status.stdout | default('')) }}"
+
+- name: "A join was asked for but there is no key and the rig is not on the tailnet"
+  ansible.builtin.assert:
+    that: _ts_running or _authkey.stat.exists
+    fail_msg: "VPN join requested for {{ inventory_hostname }} but no auth key is on the rig and it is not joined"
+
 - name: "tailscale up (only if not already Running and a key is present)"
-  # --accept-routes/--accept-dns=false so the tunnel never shadows the rig's LAN
-  # route (the SSH lifeline). No exit node. hostname = the machine name.
+  # --accept-routes/--accept-dns=false so the tunnel never shadows the rig's LAN route (the SSH lifeline).
+  # hostname = the rig's name (inventory_hostname), not its role. --timeout: never hang the play.
   ansible.builtin.command: >-
     tailscale up
     --auth-key file:{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}
     --accept-routes=false
     --accept-dns=false
-    --hostname {{ machine }}
+    --timeout 60s
+    --hostname {{ inventory_hostname }}
   when:
-    - _authkey.content is defined
-    - '"Running" not in (_ts_status.stdout | default(""))'
-  register: _ts_up
-  changed_when: _ts_up.rc == 0
-
-- name: "Report the rig's Tailscale IP"
-  ansible.builtin.command: "tailscale ip -4"
-  register: _ts_ip
-  changed_when: false
-  failed_when: false
-
-- name: "Tailscale status"
-  ansible.builtin.debug:
-    msg: "{{ machine }} on the tailnet: {{ _ts_ip.stdout | default('(not joined — enroll the authkey first)') }}"
+    - _authkey.stat.exists
+    - not _ts_running
+  no_log: true
 
 - name: "Tailnet address of the rig (the GS records it as remote_ip)"
   ansible.builtin.command: "tailscale ip -4"
@@ -112,7 +117,7 @@
   ansible.builtin.file:
     path: "{{ vpn_authkey_path | default('/etc/theia/manifest/' + machine + '/certs/vpn.authkey') }}"
     state: absent
-  when: (_ts_ip.stdout | default('') | trim | length) > 0
+  when: _authkey.stat.exists     # joined, already joined, or failed: a delivered key never stays on the rig
 
 - name: "COLONY_VPN_IP {{ machine }}"
   ansible.builtin.debug:

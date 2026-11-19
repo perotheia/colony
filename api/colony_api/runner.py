@@ -82,10 +82,9 @@ class Runner:
                name: str | None = None, host: str | None = None,
                extra: dict | None = None, secrets: dict | None = None) -> dict:
         did = uuid.uuid4().hex
-        if secrets:                      # memory only, dropped when the play ends
-            if not hasattr(self, "_secrets"):
-                self._secrets = {}
-            self._secrets[did] = dict(secrets)
+        if secrets:                      # memory only, dropped when the play ends (or on abort/prune)
+            with self._cv:
+                self.__dict__.setdefault("_secrets", {})[did] = dict(secrets)
         rec = {
             "id": did,
             "name": name or f"{kind}-{rig}",
@@ -213,6 +212,9 @@ class Runner:
                 return x.decode(errors="replace") if isinstance(x, bytes) else (x or "")
             log = _txt(e.stdout) + _txt(e.stderr) + "\n[colony-api] TIMEOUT"
             rc = 124
+        except Exception as e:  # noqa: BLE001: the worker must survive and the secret file must go
+            log = f"[colony-api] {type(e).__name__}: {e}"
+            rc = 125
         if sec_file:
             try:
                 os.unlink(sec_file)

@@ -48,6 +48,7 @@ def _require_key(x_colony_key: str | None = Header(default=None)) -> None:
 
 
 class DeployRequest(BaseModel):
+    model_config = {"extra": "forbid"}   # an unknown field (e.g. `secrets` sent to an old image) is a 422
     rig: str
     kind: str = "orchestrate"           # provision | orchestrate | cleanup
     extra: dict | None = None           # extra ansible vars, e.g. the cleanup
