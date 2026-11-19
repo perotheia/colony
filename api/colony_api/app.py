@@ -59,6 +59,7 @@ _KNOWN_HOSTS = os.environ.get("COLONY_KNOWN_HOSTS", "/var/lib/colony/known_hosts
 _SSH_TRUST = ["-o", f"UserKnownHostsFile={_KNOWN_HOSTS}", "-o", "StrictHostKeyChecking=accept-new"]
 _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,252}(:[0-9]{1,5})?$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}$")
+_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}\Z")    # a POSIX login name (ssh user)
 
 
 def _check(kind: str, value: str, rx: re.Pattern) -> str:
@@ -256,13 +257,14 @@ def create_app() -> FastAPI:
         return {"pubkey": out.stdout.strip()}
 
     @app.get("/probe", tags=["enrol"])
-    def probe(host: str) -> dict:
+    def probe(host: str, user: str | None = None) -> dict:
         """SSH a host and read its stable identity for enrolment: the eth0 MAC
         (the Mender identity key) + hostname. Uses the mounted rig SSH key. The
         operator types a Host IP in the Create-Target modal; GS proxies here so
         the modal can prefill Controller ID (MAC) + Name (hostname)."""
         _check("host", host, _HOST_RE)
-        user = os.environ.get("COLONY_SSH_USER", "axadmin")
+        # the ssh user the operator typed (GS Connect modal), else the default
+        user = _check("user", user, _USER_RE) if user else os.environ.get("COLONY_SSH_USER", "axadmin")
         # one ssh, read both. eth0 first; fall back to the first non-lo iface.
         # read hostname + eth0 MAC (fallback: first non-lo iface) in one ssh.
         remote = (
