@@ -37,6 +37,12 @@ s3_runtime_bucket   = theia-runtime
 mender_server_host  = {{ lookup('env', 'MENDER_SERVER_HOST') }}
 mender_server_ip    = {{ lookup('env', 'MENDER_SERVER_IP') }}
 mender_server_ca    = {{ lookup('env', 'MENDER_SERVER_CA') }}
+# the Mender client for OPKG rigs (TI Arago): our cross-built tarball in the S3 runtime plane at
+# <s3_runtime_bucket>/mender-client/<version>/ (tools/publish-mender-client.sh, docs/mender-opkg.md). The sha256 is
+# the PIN: the plane's index.json must name it and the rig checks the download against it (install-mender-opkg.yml).
+# Built from perotheia/mender branch arago-5.2 (upstream 5.2.0 + build files).
+mender_client_opkg_version = 5.2.0-arago-aarch64
+mender_client_opkg_sha256  = 692bc5867bfc01ca9957aa7bcf96ef1013a2b72d8c6ff866d0aec235cd0ec8f1
 # the GS's fleet-PKI signer as the CONTROLLER reaches it (empty = no per-device certificates)
 gs_pki_url          = {{ lookup('env', 'GS_PKI_URL') }}
 tipc_scope          = cluster

@@ -1,0 +1,19 @@
+#!/bin/sh
+# systemctl stub for the opkg-mender test rig: records every call; is-enabled / is-active answer from the record
+# (a unit counts as enabled + active once an `enable --now` naming it was recorded). Always succeeds otherwise.
+# Starting mender-authd creates its device key, as the real daemon does on first start.
+log=/var/log/systemctl-stub.log
+echo "$*" >> "$log"
+case "$*" in
+  "enable --now"*mender-authd*)
+    k=/var/lib/mender/mender-agent.pem
+    [ -f "$k" ] || openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$k" 2>/dev/null ;;
+esac
+case "$1" in
+  is-enabled|is-active)
+    shift
+    for u in "$@"; do
+      grep -qE "^enable --now( [^ ]+)* $u( |\$)" "$log" || exit 3
+    done ;;
+esac
+exit 0

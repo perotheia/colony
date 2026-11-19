@@ -1,0 +1,4 @@
+#!/bin/sh
+# opkg stub for the opkg-mender test rig: makes rig-class.yml classify the container as an opkg (TI Arago) rig.
+echo "opkg (stub) $*" >&2
+exit 0

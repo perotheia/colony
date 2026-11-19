@@ -1,0 +1,167 @@
+# install-mender-opkg.yml — the Mender client on an OPKG rig (TI Arago / Yocto, e.g. SK-TDA4VM). Arago has no
+# Mender package, so the client is OUR cross-built tarball (perotheia/mender branch arago-5.2 = upstream 5.2.0 +
+# build files): mender-update, mender-auth, the `directory` + `single-file` update modules (no rootfs-image: theia
+# does not use A/B), the systemd units and the D-Bus policy. It ships neither mender.conf nor artifact_info.
+#
+# Where it lives: the GS S3 runtime plane, published by tools/publish-mender-client.sh:
+#   <bucket>/mender-client/<mender_client_opkg_version>/mender-client-<version>.tar.gz
+#   <bucket>/mender-client/<mender_client_opkg_version>/index.json   {"file": <key in bucket>, "sha256": ..., ...}
+# Trust model = the runtime debs (install-runtime-s3.yml): the CONTROLLER reads the index over its own path to the
+# plane, the index must name the sha256 PINNED in inventory/hosts (mender_client_opkg_sha256: the reviewed build),
+# and the RIG downloads over the gateway's TLS (curl --cacert s3_rig_ca) and checks that hash before unpacking.
+#
+# After the payload: the SAME class-agnostic tasks as debian (mender-client-common.yml: identity seed, theia
+# update modules, state script, verify key), a fail-closed mender.conf if none exists yet (mender-enroll.yml
+# overwrites it with the full server conf), then daemon-reload, `reload dbus` (dbus-broker re-reads the policy),
+# enable --now mender-authd + mender-updated.
+#
+# Idempotent: the download + unpack are skipped while the installed payload matches: the marker
+# /usr/share/mender-client-arago/.colony-installed holds the pinned tarball sha256 AND the installed
+# MANIFEST.sha256 still checks. The identity script is excluded from that re-check only: mender-enroll.yml
+# replaces it with colony's (device_id = the rig's name) by design.
+#
+# Test-only: mender_opkg_test_container=true (test/opkg-mender/run.sh) allows a plain-http rig URL without a CA
+# and skips executing the aarch64 binaries on the x86 test host. Never set it for a real rig.
+- name: "Mender opkg: the pinned client build"
+  ansible.builtin.assert:
+    that:
+      - (mender_client_opkg_version | default('') | length) > 0
+      - mender_client_opkg_sha256 | default('') is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      mender_client_opkg_version / mender_client_opkg_sha256 must be pinned (inventory/hosts) for an opkg rig
+
+- name: "Mender opkg: resolve the plane paths"
+  ansible.builtin.set_fact:
+    _mco_bucket: "{{ s3_runtime_bucket | default('theia-runtime') }}"
+    _mco_prefix: "mender-client/{{ mender_client_opkg_version }}"
+    _mco_rig_base: "{{ s3_rig_endpoint | default(s3_endpoint, true) }}"
+    _mco_rig_ca: "{{ s3_rig_ca | default('') }}"
+    _mco_test: "{{ mender_opkg_test_container | default(false) | bool }}"
+    _mco_share: /usr/share/mender-client-arago
+
+- name: "Mender opkg: the rig fetches over TLS with a pinned CA"
+  ansible.builtin.assert:
+    that: (_mco_rig_base is match('https://') and (_mco_rig_ca | length) > 0) or _mco_test
+    fail_msg: >-
+      the rig fetches the Mender client over the gateway's TLS: set s3_rig_endpoint=https://... and s3_rig_ca
+      (THEIA_S3_RIG_ENDPOINT / THEIA_S3_RIG_CA); got '{{ _mco_rig_base }}' with CA '{{ _mco_rig_ca }}'
+
+- name: "Mender opkg: controller reads the index ({{ _mco_bucket }}/{{ _mco_prefix }}/index.json)"
+  ansible.builtin.uri:
+    url: "{{ s3_endpoint }}/{{ _mco_bucket }}/{{ _mco_prefix }}/index.json"
+    return_content: true
+  register: _mco_index_raw
+  delegate_to: localhost      # the CONTROLLER's own path to the plane: the hash never travels the rig's path
+  become: false
+
+- name: "Mender opkg: parse the index"
+  ansible.builtin.set_fact:
+    _mco_index: "{{ _mco_index_raw.content | from_json }}"
+
+- name: "Mender opkg: the index names the PINNED build"
+  ansible.builtin.assert:
+    that:
+      - _mco_index.sha256 | default('') == mender_client_opkg_sha256
+      - (_mco_index.file | default('')).startswith(_mco_prefix ~ '/')
+      - "'..' not in (_mco_index.file | default(''))"
+    fail_msg: >-
+      {{ _mco_bucket }}/{{ _mco_prefix }}/index.json names sha256 {{ _mco_index.sha256 | default('(none)') }}
+      file {{ _mco_index.file | default('(none)') }}; inventory pins {{ mender_client_opkg_sha256 }}: re-publish
+      the reviewed tarball (tools/publish-mender-client.sh) or update the pin on purpose
+
+- name: "Mender opkg: is this build already installed (marker + manifest)?"
+  ansible.builtin.shell:
+    cmd: >-
+      m={{ _mco_share }};
+      [ "$(cat $m/.colony-installed 2>/dev/null)" = "{{ mender_client_opkg_sha256 }}" ] || { echo absent; exit 0; };
+      cd / && grep -v ' usr/share/mender/identity/mender-device-identity$' $m/MANIFEST.sha256
+      | sha256sum -c - >/dev/null 2>&1 && echo installed || echo damaged
+  register: _mco_state
+  changed_when: false
+
+- name: "Mender opkg: fetch the tarball over TLS, check the pinned sha256"
+  # curl + sha256sum (as install-runtime-s3.yml): get_url cannot pin a CA file here. A wrong hash deletes the file
+  # and fails the play BEFORE anything is unpacked.
+  ansible.builtin.shell:
+    cmd: >-
+      set -e; f=/var/tmp/mender-client-arago.tar.gz;
+      curl -fsS --retry 3 {{ ('--cacert ' + _mco_rig_ca) if (_mco_rig_ca | length > 0) else '' }}
+      -o "$f.part" "{{ _mco_rig_base }}/{{ _mco_bucket }}/{{ _mco_index.file }}";
+      echo "{{ mender_client_opkg_sha256 }}  $f.part" | sha256sum -c - >/dev/null
+      || { rm -f "$f.part"; echo "sha256 mismatch: {{ _mco_index.file }}" >&2; exit 1; };
+      mv "$f.part" "$f"; echo fetched
+  when: _mco_state.stdout != 'installed'
+
+- name: "Mender opkg: unpack into / (existing dirs keep their modes)"
+  ansible.builtin.shell:
+    cmd: >-
+      set -e; f=/var/tmp/mender-client-arago.tar.gz;
+      tar -xzf "$f" -C / --no-overwrite-dir; rm -f "$f"
+  when: _mco_state.stdout != 'installed'
+
+- name: "Mender opkg: MANIFEST.sha256 check of every installed file"
+  ansible.builtin.command:
+    cmd: sha256sum -c {{ _mco_share }}/MANIFEST.sha256
+    chdir: /
+  register: _mco_manifest
+  changed_when: false
+  when: _mco_state.stdout != 'installed'
+
+- name: "Mender opkg: config + state dirs (the package ships none)"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/mender, mode: "0755" }
+    - { path: /var/lib/mender, mode: "0700" }
+    - { path: /usr/share/mender/inventory, mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: "Mender opkg: the client runs on this rig (its libssl/libdbus resolve)"
+  ansible.builtin.command: mender-update --version
+  changed_when: false
+  when: not _mco_test
+
+- name: "Mender opkg: the class-agnostic half (identity seed, OTA modules, state script, verify key)"
+  ansible.builtin.include_tasks: mender-client-common.yml
+
+# The package ships no mender.conf. Without one the client would run on defaults and accept UNSIGNED artifacts in
+# standalone mode, so seed a fail-closed conf when none exists: ArtifactVerifyKey set (a missing key file = every
+# artifact refused). mender-enroll.yml replaces the whole file with the server conf when the server is known.
+- name: "Mender opkg: a fail-closed mender.conf when none exists yet"
+  ansible.builtin.copy:
+    dest: /etc/mender/mender.conf
+    mode: "0600"
+    force: false
+    content: |
+      {
+        "ArtifactVerifyKey": "/etc/mender/artifact-verify-key.pem",
+        "TenantToken": ""
+      }
+
+- name: "Mender opkg: systemd re-reads the units, dbus-broker re-reads the policy"
+  ansible.builtin.command: "systemctl {{ item }}"
+  loop:
+    - daemon-reload
+    - reload dbus
+  when: _mco_state.stdout != 'installed'
+
+- name: "Mender opkg: are mender-authd + mender-updated enabled and running?"
+  ansible.builtin.shell:
+    cmd: systemctl is-enabled mender-authd mender-updated && systemctl is-active mender-authd mender-updated
+  register: _mco_units
+  changed_when: false
+  failed_when: false
+
+- name: "Mender opkg: enable --now mender-authd + mender-updated"
+  ansible.builtin.command: systemctl enable --now mender-authd mender-updated
+  when: _mco_state.stdout != 'installed' or _mco_units.rc != 0
+
+# Last: the marker only lands once the whole sequence above passed, so a run that failed halfway redoes it.
+- name: "Mender opkg: record the installed build"
+  ansible.builtin.copy:
+    dest: "{{ _mco_share }}/.colony-installed"
+    mode: "0644"
+    content: "{{ mender_client_opkg_sha256 }}\n"
