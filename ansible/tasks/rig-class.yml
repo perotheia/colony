@@ -1,7 +1,7 @@
 # rig-class.yml — classify the rig ONCE, so every later task either supports its class or skips it BY NAME.
 #   debian  apt + dpkg (BeagleBone AI-64 Debian 13, rpi4, the container rigs): the full path
-#   opkg    TI Arago / Yocto images (SK-TDA4VM): base plane only: runtime payload, supervisor unit, TIPC, VPN;
-#           NO Mender client (no package for Arago), no apt os_packages, no etcd-server package
+#   opkg    TI Arago / Yocto images (SK-TDA4VM): runtime payload, supervisor unit, TIPC, VPN, and the Mender client
+#           from our cross-built tarball (install-mender-opkg.yml); no apt os_packages, no etcd-server package
 # A class a task does not support is reported in `rig_skips` and printed at the end of the play: never a
 # silent `failed_when: false` green.
 - name: "Detect apt / opkg on the rig"

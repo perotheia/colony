@@ -8,7 +8,10 @@
 #   3. etcd-server ONLY on the etcd_machine (skip if etcd_external)
 #   4. an EMPTY executor.json (replace=no) so the supervisor boots + supervises
 #      nothing — the Phase-1 checkpoint
-#   5. install + enrol the Mender client (the one persistent agent; OTA only)
+#   5. install + enrol the Mender client (the one persistent agent; OTA only):
+#      debian rigs from the pinned apt package, opkg rigs (TI Arago) from the pinned
+#      cross-built tarball in the S3 runtime plane (tasks/install-mender-opkg.yml)
+#   opkg rigs skip, BY NAME: os-packages (apt), etcd (apt package)
 #
 # Run:  ansible-playbook provision.yml -l rpi4
 #       (theia.py `provision <machine>` wraps this, limiting to the host whose
@@ -138,20 +141,20 @@
         content: |
           {"name":"root","children":[]}
 
-    - name: "Include Mender client install + enrol"
+    # Both rig classes get the Mender client: debian from the pinned apt package, opkg (TI Arago) from our
+    # cross-built tarball in the S3 runtime plane. The identity seed, OTA modules, state script and verify key are
+    # one shared task (mender-client-common.yml), and the enrollment below is class-agnostic.
+    - name: "Include Mender client install (debian: pinned apt package)"
       ansible.builtin.include_tasks: tasks/install-mender.yml
       when: rig_class == 'debian'
 
+    - name: "Include Mender client install (opkg: the pinned Arago tarball from the S3 runtime plane)"
+      ansible.builtin.include_tasks: tasks/install-mender-opkg.yml
+      when: rig_class == 'opkg'
+
     - name: "Include Mender enrollment (server, CA, identity): the rig checks in PENDING"
       ansible.builtin.include_tasks: tasks/mender-enroll.yml
-      when:
-        - rig_class == 'debian'
-        - (mender_server_host | default('') | length) > 0
-
-    - name: "NAMED SKIP (opkg rig): Mender client (no Arago package: base plane only, no OTA)"
-      ansible.builtin.set_fact:
-        rig_skips: "{{ rig_skips + ['mender client (app-plane OTA)'] }}"
-      when: rig_class != 'debian'
+      when: (mender_server_host | default('') | length) > 0
 
     - name: "Include the per-device PKI (own key on the rig, certificate from the GS signer)"
       ansible.builtin.include_tasks: tasks/pki-enroll.yml

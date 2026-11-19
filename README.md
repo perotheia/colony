@@ -52,6 +52,7 @@ theia's runtime `.deb` — colony places them, it does not contain them.
 | `ansible/orchestrate.yml` | phase 2 — push the bundle (.deb + executor.json + per-FC config) |
 | `ansible/cleanup.yml` | uninstall any prior Theia from a rig |
 | `ansible/tasks/` | the shared includes (install-bundle, setcap, seed-config, config-override, etcd, mender, tailscale, supervisor-unit) |
+| `docs/mender-opkg.md` | the Mender client on opkg (TI Arago) rigs: the cross-built tarball in the S3 plane, `tools/publish-mender-client.sh`, the board-free test `test/opkg-mender/run.sh` |
 | `docs/fleet-vpn.md` | the fleet tailnet: tags (`tag:fleet-gs`, `tag:fleet-rig`), the policy file, the API token, rig enrollment (apt + static/Arago) |
 | `ansible/templates/theia-supervisor.service.j2` | the systemd unit (ExecStart=theia-run, OTA-correct) |
 | `ansible/inventory/hosts` | resolves manifest_dir/registry_dir/config_override_dir from `$THEIA_WORKSPACE` |
