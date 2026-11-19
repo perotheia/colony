@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# deb-to-mender.sh <machine> <ver> <deb> — pack a theia-release .mender from the
-# /opt/theia tree inside a per-machine dist .deb (what `theia dist` builds).
+# deb-to-mender.sh <machine> <ver> <deb|dir> — pack a theia-release .mender from the
+# /opt/theia tree inside a per-machine dist .deb (what `theia dist` builds), or from
+# a directory that IS such a tree (bin/ config/ …: run-full-story.sh's app trees).
 #
 # This sidesteps `theia release-role`, which builds //packaging/theia (a FRAMEWORK
 # target absent from a consuming/demo workspace). The dist .deb already carries the
@@ -17,13 +18,14 @@ MA="$(command -v mender-artifact-wrap || command -v mender-artifact)"
 SIGN_KEY="${THEIA_SWP_SIGN_KEY:-}"
 SIGN_ARGS=()
 if [ -n "$SIGN_KEY" ] && [ -f "$SIGN_KEY" ]; then SIGN_ARGS=(--key "$SIGN_KEY"); fi
-[ -f "$DEB" ] || { echo "no deb: $DEB" >&2; exit 1; }
+[ -f "$DEB" ] || [ -d "$DEB" ] || { echo "no deb or tree: $DEB" >&2; exit 1; }
 mkdir -p "$DIST_ROOT/roles"
 OUT="$DIST_ROOT/roles/${MACHINE}-${VER}.mender"
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 # extract the deb's /opt/theia tree → the release dir
-dpkg-deb -x "$DEB" "$WORK/root"
+if [ -d "$DEB" ]; then mkdir -p "$WORK/root/opt"; cp -a "$DEB" "$WORK/root/opt/theia"
+else dpkg-deb -x "$DEB" "$WORK/root"; fi
 [ -d "$WORK/root/opt/theia" ] || { echo "deb has no /opt/theia tree" >&2; exit 1; }
 # pack release.tar.gz from /opt/theia (bin/ lib/ …) + the version marker. NOTE:
 # executor.json is NOT in the release — the supervisor reads /opt/theia/config/

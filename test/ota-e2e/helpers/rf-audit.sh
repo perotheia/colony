@@ -61,26 +61,21 @@ else
   echo "[rf] live: cluster too sparse ($cnt bindings) — composer not fully on the wire" >&2; B=1
 fi
 
-# -- C. mTLS deployed via the app SWP (com serves mutual TLS) --------------
-# The app SWP carries the dev mTLS cert set (theia manifest stages
-# dist/manifest/<machine>/certs/ -> release-swp packs it -> the theia-swp module
-# lays it at the flipped release's config/certs/ -> theia-run exports
-# THEIA_COM_TLS_* -> com serves mutual TLS). Assert the deployed com actually
-# went from plaintext to TLS on -- the cert-deployment flow, end to end.
-echo "[rf] mTLS: com TLS-serving after the app OTA (cert-deployment flow)"
+# -- C. com is mutual TLS with the FLEET certificate (never plaintext) -------
+# A deployed rig's com REQUIRES mutual TLS (theia-run.sh: THEIA_COM_TLS_REQUIRED=1)
+# with the fleet identity colony's pki-enroll laid in /etc/theia/pki. The full
+# client-side regression (operator OK; plaintext / no cert / foreign CA / wrong name
+# refused) is helpers/com-mtls-check.py (run-full-story STEP 4b + 8); here: the
+# composer's com still says so in its log, and no "TLS off" line exists.
+echo "[rf] mTLS: com serves mutual TLS with the fleet certificate"
 C=0
-central_certs="$(docker exec ota-central sh -c 'ls /opt/theia/current/config/certs/server.crt 2>/dev/null' || true)"
-if [ -z "$central_certs" ]; then
-  echo "[rf] mTLS: no current/config/certs on central -- SWP did not carry the cert set (plaintext deploy or a theia without the cert-staging flow) -- ADVISORY, not failing"
+tlslog="$(docker exec ota-central sh -c 'journalctl -u theia-supervisor --no-pager 2>/dev/null; cat /tmp/theia/*.log 2>/dev/null' | grep -E 'gRPC: TLS (on|off)' || true)"
+if echo "$tlslog" | grep -q 'gRPC: TLS off'; then
+  echo "[rf] mTLS: com logged 'TLS off' -- plaintext on a deployed rig" >&2; C=1
+elif echo "$tlslog" | grep -qE 'TLS on \(cert=/etc/theia/pki/device.crt.*MUTUAL'; then
+  echo "[rf] mTLS: $(echo "$tlslog" | grep -m1 'MUTUAL')"
 else
-  tlslog="$(docker exec ota-central sh -c 'grep -hE "gRPC: TLS (on|off)" /var/log/theia-supervisor.log /tmp/theia/com.log 2>/dev/null | tail -5' || true)"
-  if echo "$tlslog" | grep -q 'gRPC: TLS on'; then
-    echo "[rf] mTLS: com serves mutual TLS OK ($(echo "$tlslog" | grep -m1 'TLS on'))"
-  elif echo "$tlslog" | grep -q 'gRPC: TLS off'; then
-    echo "[rf] mTLS: com is PLAINTEXT (TLS off) -- the SWP cert-deployment flow did not take" >&2; C=1
-  else
-    echo "[rf] mTLS: no gRPC TLS line yet (servers lazy-init) -- certs present, inconclusive-pass"
-  fi
+  echo "[rf] mTLS: no 'TLS on (cert=/etc/theia/pki/device.crt ... MUTUAL' line from com" >&2; C=1
 fi
 
 [ "$A" = 0 ] && [ "$B" = 0 ] && [ "$C" = 0 ] && { echo "[rf] AUDIT PASS (static + live + mTLS)"; exit 0; }
