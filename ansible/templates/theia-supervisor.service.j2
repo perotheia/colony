@@ -36,6 +36,10 @@ Environment=THEIA_TIPC_NETID={{ tipc_netid }}
 # reaches central's per; V-UCM reads cross-board). Single-board rigs omit this
 # (default NODE scope keeps co-clustered rigs from seeing each other's services).
 Environment=THEIA_TIPC_SCOPE=cluster
+{% if com_insecure | default(false) | bool %}
+# DEBUG ONLY (com_insecure=true was passed on purpose): com serves PLAINTEXT gRPC. Never set by the GS.
+Environment=THEIA_COM_INSECURE=1
+{% endif %}
 {% endif %}
 # theia-run.sh: require current, set THEIA_SUPERVISOR_MANIFEST + LD_LIBRARY_PATH=
 # $THEIA_ROOT_DIR/current/lib, then exec /opt/theia/bin/supervisor.
