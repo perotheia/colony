@@ -53,6 +53,8 @@ class DeployRequest(BaseModel):
     extra: dict | None = None           # extra ansible vars, e.g. the cleanup
                                         # scope {clean_app, clean_runtime, clean_mender}
     host: str | None = None             # explicit IP override (per-device deploy)
+    secrets: dict | None = None         # secret ansible vars (e.g. vpn_authkey): passed as a 0600 vars
+                                        # file, held in memory only: never journaled, logged or returned
     schedule: float | None = None        # unix ts; None = run now
     name: str | None = None
 
@@ -102,7 +104,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404,
                                 detail=f"no rig '{req.rig}' in the registry "
                                        "(and no host — pass host for registry-free)")
-        return runner.create(req.rig, req.kind, req.schedule, req.name, req.host, req.extra)
+        return runner.create(req.rig, req.kind, req.schedule, req.name, req.host, req.extra,
+                             secrets=req.secrets)
 
     @app.delete("/deployments", tags=["deploy"])
     def prune_deployments(rig: str | None = None,

@@ -46,6 +46,11 @@ def _ansible(playbook: str, args: list[str]) -> int:
     the env roots the inventory's manifest_dir/registry_dir/config_override_dir."""
     cmd = ["ansible-playbook", "-i", str(ANSIBLE / "inventory" / "hosts"),
            str(ANSIBLE / playbook), *args]
+    # Deployment SECRETS (e.g. a per-rig VPN auth key from the GS): a 0600 vars file named by the environment,
+    # never argv (ps) and never the journal. colony-api writes and removes it.
+    _sec = os.environ.get("COLONY_SECRETS_FILE")
+    if _sec and os.path.isfile(_sec):
+        cmd += ["-e", "@" + _sec]
     env_ws = {**os.environ, "THEIA_WORKSPACE": str(WORKSPACE)}
     print(f"+ THEIA_WORKSPACE={WORKSPACE}", file=sys.stderr)
     os.environ.update(env_ws)

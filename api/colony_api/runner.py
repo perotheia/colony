@@ -16,6 +16,7 @@ a lab fleet's deployment history is small.
 from __future__ import annotations
 
 import json
+import tempfile
 import os
 import re
 import subprocess
@@ -79,8 +80,12 @@ class Runner:
     # ── public API (the routes call these) ──────────────────────────────────
     def create(self, rig: str, kind: str, schedule: float | None = None,
                name: str | None = None, host: str | None = None,
-               extra: dict | None = None) -> dict:
+               extra: dict | None = None, secrets: dict | None = None) -> dict:
         did = uuid.uuid4().hex
+        if secrets:                      # memory only, dropped when the play ends
+            if not hasattr(self, "_secrets"):
+                self._secrets = {}
+            self._secrets[did] = dict(secrets)
         rec = {
             "id": did,
             "name": name or f"{kind}-{rig}",
@@ -191,6 +196,13 @@ class Runner:
         if extra:
             ev = [f"{k}={v}" for k, v in extra.items()]
             cmd += ["-e", " ".join(ev)]
+        sec = getattr(self, "_secrets", {}).pop(rec["id"], None)
+        sec_file = None
+        if sec:
+            fd, sec_file = tempfile.mkstemp(prefix="colony-sec-", suffix=".json")   # mkstemp: 0600
+            with os.fdopen(fd, "w") as f:
+                json.dump(sec, f)
+            env["COLONY_SECRETS_FILE"] = sec_file
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, env=env,
                                timeout=1800)
@@ -201,6 +213,18 @@ class Runner:
                 return x.decode(errors="replace") if isinstance(x, bytes) else (x or "")
             log = _txt(e.stdout) + _txt(e.stderr) + "\n[colony-api] TIMEOUT"
             rc = 124
+        if sec_file:
+            try:
+                os.unlink(sec_file)
+            except OSError:
+                pass
+            for v in sec.values():       # belt and braces: a secret never reaches the stored log
+                if isinstance(v, str) and len(v) >= 8:
+                    log = log.replace(v, "***")
+        # the rig's fleet-VPN address, reported by tasks/install-tailscale.yml (the GS records it as remote_ip)
+        m = re.search(r"COLONY_VPN_IP \S+ (\d+\.\d+\.\d+\.\d+)", log)
+        if m:
+            rec["vpn_ip"] = m.group(1)
         rig_host = self._rig_host(rec["rig"])
         stats = _parse_recap(log, rig_host)
         if rc != 0 and stats["failure"] == 0 and stats["success"] == 0:
