@@ -6,7 +6,8 @@ both through one client shape — design §6):
     GET  /rigs                          the deploy targets (≈ Mender devices)
     GET  /deployments                   the run journal (active|scheduled|finished)
     POST /deployments                   {rig, kind, schedule?} → enqueue a play
-    GET  /deployments/{id}              one deployment's status + statistics
+                                        (409 {detail, id, status} while the rig has one pending/in progress)
+    GET  /deployments/{id}              one deployment's status + statistics + live progress/log_tail
     GET  /deployments/{id}/log          the Ansible output (tail)
     POST /deployments/{id}/abort        abort a pending/scheduled run
 
@@ -25,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import __version__, registry
-from .runner import runner
+from .runner import RigBusy, runner
 
 
 def _split_hostport(host: str):
@@ -137,8 +138,13 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404,
                                 detail=f"no rig '{req.rig}' in the registry "
                                        "(and no host — pass host for registry-free)")
-        return runner.create(req.rig, req.kind, req.schedule, req.name, req.host, req.extra,
-                             secrets=req.secrets)
+        try:
+            return runner.create(req.rig, req.kind, req.schedule, req.name, req.host, req.extra,
+                                 secrets=req.secrets)
+        except RigBusy as e:             # one pending/in-progress deployment per rig (the GS refuses first)
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=409, content={"detail": str(e), "id": e.did,
+                                                          "status": e.status})
 
     @app.delete("/deployments", tags=["deploy"])
     def prune_deployments(rig: str | None = None,
