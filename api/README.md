@@ -13,8 +13,8 @@ Mender. One operator surface, two authorities — see
 | `GET` | `/rigs` | `GET /devices` | deploy targets from `deploy/registry/*.yml` |
 | `GET` | `/rigs/{name}` | — | one rig's public knobs |
 | `GET` | `/deployments` | `GET /deployments` | the run journal |
-| `POST` | `/deployments` | `POST /deployments` | `{rig, kind, schedule?}` → enqueue a play |
-| `GET` | `/deployments/{id}` | same | status + statistics |
+| `POST` | `/deployments` | `POST /deployments` | `{rig, kind, schedule?}` → enqueue a play; `409 {detail, id, status}` while the rig has one pending/in progress |
+| `GET` | `/deployments/{id}` | same | status + statistics + `progress`/`log_tail` (live while the play runs) + `vpn_ip`, `pki`, `rig_class`, `skipped_by_design` |
 | `GET` | `/deployments/{id}/log` | — | the Ansible output (tail) |
 | `POST` | `/deployments/{id}/abort` | abort | abort a pending/scheduled run |
 
@@ -22,6 +22,11 @@ Mender. One operator surface, two authorities — see
 Mender** — `pending | scheduled | inprogress | finished` + a
 `statistics.status` `{success, failure, pending, …}` dict parsed from the Ansible
 PLAY RECAP — so gs-api's `RolloutBar`/`StatusBadge` render colony rows unchanged.
+
+Live progress: the play runs under Popen and every output line is folded into the record:
+`progress {tasks_done, current_task, failed_task, failed_msg, tasks: [{name, result: ok|changed|skipped|failed}]}`
+and `log_tail` (last 4 KB, secrets scrubbed). Tests: `python3 -m pytest tests/` (a fake `bin/colony` via
+`$COLONY_BIN` prints a recorded play).
 
 ## How it runs the play
 
