@@ -313,6 +313,7 @@ class Runner:
                 if keep_states is not None and rec.get("status") not in keep_states:
                     continue
                 del self._deps[did]
+                self.__dict__.get("_secrets", {}).pop(did, None)   # a pruned run never needs its secrets
                 removed += 1
             self._rewrite_journal()
         return removed
@@ -337,6 +338,7 @@ class Runner:
                 r["finished"] = _now()
                 r["statistics"]["status"] = {"success": 0, "failure": 0,
                                              "aborted": 1, "pending": 0}
+                self.__dict__.get("_secrets", {}).pop(did, None)   # it will never run: drop its secrets now
                 self._spill(r)
                 return True
         return False
@@ -391,7 +393,9 @@ class Runner:
         cmd = ["python3", str(_colony_bin()), rec["kind"], rec["rig"]]
         # REGISTRY-FREE: pass host + role as FLAGS so colony resolves the device
         # from Mender (host) + the S3 manifest slice (role) with no registry file.
-        # Everything else (machine_instance, …) rides as -e k=v.
+        # Everything else (machine_instance, …) rides as ONE JSON object `-e '{...}'` (one argv item): ansible
+        # never splits it into more variables (a space-joined k=v string was an injection: a value with a
+        # space became a second variable).
         extra = dict(rec.get("extra") or {})
         role = extra.pop("role", None)
         if rec.get("host"):
@@ -399,8 +403,7 @@ class Runner:
         if role:
             cmd += ["--role", str(role)]
         if extra:
-            ev = [f"{k}={v}" for k, v in extra.items()]
-            cmd += ["-e", " ".join(ev)]
+            cmd += ["-e", json.dumps(extra, separators=(",", ":"))]
         with self._cv:
             sec = getattr(self, "_secrets", {}).pop(rec["id"], None)
         scrub = [v for v in (sec or {}).values() if isinstance(v, str) and len(v) >= 8]

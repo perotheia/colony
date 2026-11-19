@@ -62,10 +62,11 @@
     - not (etcd_external | default(false) | bool)
     - ansible_service_mgr == "systemd"
 
-- name: "Start etcd directly (NO systemd — container rig)"
+- name: "etcd start script (NO systemd — container rig)"
   # A systemd-less rig (container) can't use the unit; launch etcd in the
   # background with the env from /etc/default/etcd (the listen/advertise URLs).
-  # Idempotent: kill a prior one (skip self) then setsid-detach a fresh one.
+  # The script kills a prior one then setsid-detaches a fresh one: it runs ONLY when the config or this script
+  # changed, or etcd is not running (review 2026-11-19: `changed_when: true` bounced etcd on every run).
   ansible.builtin.copy:
     dest: /usr/local/bin/etcd-start.sh
     mode: "0755"
@@ -79,15 +80,27 @@
       setsid etcd >/var/log/etcd.log 2>&1 < /dev/null &
       sleep 2
       pgrep -x etcd >/dev/null
+  register: _etcd_script
   when:
     - machine == etcd_machine
     - not (etcd_external | default(false) | bool)
     - ansible_service_mgr != "systemd"
 
-- name: "Launch etcd via the start script (container rig)"
+- name: "Is etcd running? (container rig)"
+  ansible.builtin.command: pgrep -x etcd
+  register: _etcd_running
+  changed_when: false
+  failed_when: false
+  when:
+    - machine == etcd_machine
+    - not (etcd_external | default(false) | bool)
+    - ansible_service_mgr != "systemd"
+
+- name: "Launch etcd via the start script (container rig: config/script changed, or not running)"
   ansible.builtin.command: /usr/local/bin/etcd-start.sh
   when:
     - machine == etcd_machine
     - not (etcd_external | default(false) | bool)
     - ansible_service_mgr != "systemd"
+    - (_etcd_cfg is changed) or (_etcd_script is changed) or (_etcd_running.rc | default(1)) != 0
   changed_when: true

@@ -24,7 +24,9 @@ cmd_provision/orchestrate/cleanup):
 bundle + registry (defaults to the CWD); $COLONY_ANSIBLE overrides the playbook dir
 (defaults to this repo's ansible/).
 """
+import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +36,17 @@ ANSIBLE = Path(os.environ.get("COLONY_ANSIBLE") or (HERE.parent / "ansible"))
 # The workspace that holds the bundle (dist/manifest) + registry + config overrides.
 # theia's `dist` emits there; colony reads it. Defaults to the CWD (run from the ws).
 WORKSPACE = Path(os.environ.get("THEIA_WORKSPACE") or os.getcwd())
+
+
+# rig / host / role reach ansible as extra vars: identifiers only (colony-api checks the same before it calls here)
+_RIG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?\Z")
+_ROLE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}\Z")
+
+
+def _ev(d: dict) -> list[str]:
+    """Extra vars as ONE JSON object (one argv item): ansible never splits it into more variables."""
+    return ["-e", json.dumps(d, separators=(",", ":"))]
 
 
 def _run(cmd: list[str], cwd: Path) -> int:
@@ -85,26 +98,26 @@ def _verb(playbook: str, verb: str, args: list[str]) -> int:
               f"`colony {verb} board-A --host 10.0.0.23:2201 --role zonal`",
               file=sys.stderr)
         return 2
+    for what, val, rx in (("rig", rig, _RIG_RE), ("--host", host, _HOST_RE), ("--role", role, _ROLE_RE)):
+        if val is not None and not rx.match(val):
+            print(f"colony {verb}: {what} {val!r} is not a valid value", file=sys.stderr)
+            return 2
 
     # REGISTRY-FREE path: --host + --role given. Host resolution comes from Mender
     # (the GS deploy passes the device's reachable_ip); `role` (master|zonal) is the
     # S3 manifest slice + the machine_index/etcd/mender-gw derivation. No registry
     # file, no local $THEIA_WORKSPACE. Extra knobs (machine_instance, etc.) ride in
-    # `rest` as `-e k=v`. `machine` = the role so orchestrate reads manifest/<role>/.
+    # `rest` (colony-api: one `-e '<json>'`). `machine` = the role so orchestrate reads manifest/<role>/.
     if host or role:
         if not (host and role):
             print(f"colony {verb}: registry-free deploy needs BOTH --host and "
                   f"--role (got host={host!r} role={role!r}).", file=sys.stderr)
             return 2
         a_host, _, a_port = host.partition(":")
-        ev = [f"target={rig}", f"machine={role}", f"role={role}",
-              f"ansible_host={a_host}"]
+        ev = {"target": rig, "machine": role, "role": role, "ansible_host": a_host}
         if a_port.isdigit():
-            ev.append(f"ansible_port={a_port}")
-        extra = []
-        for kv in ev:
-            extra += ["-e", kv]
-        return _ansible(playbook, [*extra, *rest])
+            ev["ansible_port"] = int(a_port)
+        return _ansible(playbook, [*_ev(ev), *rest])
 
     # LEGACY path: resolve from a registry file (back-compat for CLI/dev use).
     reg_dir = Path(os.environ.get("COLONY_REGISTRY")
@@ -115,8 +128,7 @@ def _verb(playbook: str, verb: str, args: list[str]) -> int:
               f"`--host IP[:PORT] --role master|zonal` for a registry-free deploy.",
               file=sys.stderr)
         return 1
-    return _ansible(playbook, ["-e", f"target={rig}",
-                               "-e", f"registry_dir={reg_dir}", *rest])
+    return _ansible(playbook, [*_ev({"target": rig, "registry_dir": str(reg_dir)}), *rest])
 
 
 def main(argv: list[str]) -> int:

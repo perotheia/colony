@@ -58,6 +58,20 @@
   ansible.builtin.set_fact:
     _mco_index: "{{ _mco_index_raw.content | from_json }}"
 
+# The index's `file` reaches the rig's root shell (the curl below): a plain object key only, checked BEFORE any
+# shell task runs, and quoted (| quote) wherever it is used in a shell anyway. Review 2026-11-19: it was
+# interpolated into a double-quoted root shell (`"...{{ _mco_index.file }}"`): `"; cmd; "` ran as root on the rig.
+- name: "Mender opkg: the index names a plain object key"
+  ansible.builtin.assert:
+    that:
+      - _mco_index.file | default('') is string
+      - _mco_index.file | default('') is match('^[A-Za-z0-9._/-]+$')
+      - (_mco_index.file | default('')).startswith(_mco_prefix ~ '/')
+      - "'..' not in (_mco_index.file | default(''))"
+    fail_msg: >-
+      {{ _mco_bucket }}/{{ _mco_prefix }}/index.json: `file` is not a plain object key under {{ _mco_prefix }}/
+      ([A-Za-z0-9._/-], no '..'): refusing it (re-publish with tools/publish-mender-client.sh)
+
 - name: "Mender opkg: the index names the PINNED build"
   ansible.builtin.assert:
     that:
@@ -72,9 +86,9 @@
 - name: "Mender opkg: is this build already installed (marker + manifest)?"
   ansible.builtin.shell:
     cmd: >-
-      m={{ _mco_share }};
-      [ "$(cat $m/.colony-installed 2>/dev/null)" = "{{ mender_client_opkg_sha256 }}" ] || { echo absent; exit 0; };
-      cd / && grep -v ' usr/share/mender/identity/mender-device-identity$' $m/MANIFEST.sha256
+      m={{ _mco_share | quote }};
+      [ "$(cat "$m/.colony-installed" 2>/dev/null)" = {{ mender_client_opkg_sha256 | quote }} ] || { echo absent; exit 0; };
+      cd / && grep -v ' usr/share/mender/identity/mender-device-identity$' "$m/MANIFEST.sha256"
       | sha256sum -c - >/dev/null 2>&1 && echo installed || echo damaged
   register: _mco_state
   changed_when: false
@@ -85,10 +99,10 @@
   ansible.builtin.shell:
     cmd: >-
       set -e; f=/var/tmp/mender-client-arago.tar.gz;
-      curl -fsS --retry 3 {{ ('--cacert ' + _mco_rig_ca) if (_mco_rig_ca | length > 0) else '' }}
-      -o "$f.part" "{{ _mco_rig_base }}/{{ _mco_bucket }}/{{ _mco_index.file }}";
-      echo "{{ mender_client_opkg_sha256 }}  $f.part" | sha256sum -c - >/dev/null
-      || { rm -f "$f.part"; echo "sha256 mismatch: {{ _mco_index.file }}" >&2; exit 1; };
+      curl -fsS --retry 3 {{ ('--cacert ' ~ (_mco_rig_ca | quote)) if (_mco_rig_ca | length > 0) else '' }}
+      -o "$f.part" {{ (_mco_rig_base ~ '/' ~ _mco_bucket ~ '/' ~ _mco_index.file) | quote }};
+      printf '%s  %s\n' {{ mender_client_opkg_sha256 | quote }} "$f.part" | sha256sum -c - >/dev/null
+      || { rm -f "$f.part"; echo "sha256 mismatch:" {{ _mco_index.file | quote }} >&2; exit 1; };
       mv "$f.part" "$f"; echo fetched
   when: _mco_state.stdout != 'installed'
 

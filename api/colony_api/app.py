@@ -22,6 +22,7 @@ import os
 import subprocess
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -58,15 +59,53 @@ def _require_key(x_colony_key: str | None = Header(default=None)) -> None:
 # (accept-new = trust on first use, then strict): a changed key fails instead of being accepted silently.
 _KNOWN_HOSTS = os.environ.get("COLONY_KNOWN_HOSTS", "/var/lib/colony/known_hosts")
 _SSH_TRUST = ["-o", f"UserKnownHostsFile={_KNOWN_HOSTS}", "-o", "StrictHostKeyChecking=accept-new"]
-_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,252}(:[0-9]{1,5})?$")
-_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}$")
+_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,252}(:[0-9]{1,5})?\Z")
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}\Z")
 _USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}\Z")    # a POSIX login name (ssh user)
+# A deployment request reaches ansible-playbook as extra vars on the controller (root, the fleet ssh key): every
+# value is checked here, and the runner hands them to ansible as ONE JSON object (never a space-joined k=v string,
+# which ansible splits into more variables: role="master ansible_ssh_common_args=..." was an injection).
+_RIG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_ROLE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}\Z")
+_EXTRA_KEY_RE = re.compile(r"^[a-z_][a-z0-9_]{0,63}\Z")
+# a string value: no whitespace, quotes, '=', '/', braces ('{{' is templated by ansible on the controller) or a
+# leading '-'
+_EXTRA_STR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+@-]{0,127}\Z")
+_SECRET_STR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+@-]{0,1023}\Z")
+_EXTRA_PER_KEY = {                       # tighter shapes for the keys the GS sends
+    "role": _ROLE_RE,
+    "ansible_user": _USER_RE,
+    "mender_device_id": _RIG_RE,
+    "runtime_version": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}\Z"),
+}
+# set by the CLI from rig/host/role, or connection-level ansible vars: never from a request
+_EXTRA_RESERVED = {"target", "machine", "registry_dir", "manifest_dir", "config_override_dir"}
+_EXTRA_ANSIBLE_OK = {"ansible_user"}
 
 
 def _check(kind: str, value: str, rx: re.Pattern) -> str:
     if not isinstance(value, str) or not rx.match(value):
         raise HTTPException(status_code=422, detail=f"{kind}: not a valid value")
     return value
+
+
+def _check_vars(kind: str, d: dict | None, str_re: re.Pattern, per_key: dict | None = None) -> None:
+    """Extra / secret ansible vars: keys [a-z_][a-z0-9_]*, no reserved or connection-level (ansible_*) key,
+    values a bool, an int or a tight string (per key where known). 422 naming the key, never the value."""
+    if d is None:
+        return
+    if not isinstance(d, dict):
+        raise HTTPException(status_code=422, detail=f"{kind}: an object of variables")
+    for k, v in d.items():
+        if not isinstance(k, str) or not _EXTRA_KEY_RE.match(k):
+            raise HTTPException(status_code=422, detail=f"{kind}: not a valid variable name")
+        if k in _EXTRA_RESERVED or (k.startswith("ansible_") and k not in _EXTRA_ANSIBLE_OK):
+            raise HTTPException(status_code=422, detail=f"{kind}.{k}: a reserved variable")
+        if isinstance(v, bool) or (isinstance(v, int) and abs(v) < 2 ** 31):
+            continue
+        rx = (per_key or {}).get(k, str_re)
+        if not isinstance(v, str) or not rx.match(v):
+            raise HTTPException(status_code=422, detail=f"{kind}.{k}: not a valid value")
 
 
 class DeployRequest(BaseModel):
@@ -90,6 +129,14 @@ def create_app() -> FastAPI:
     if not os.environ.get("COLONY_API_KEY"):
         raise RuntimeError("COLONY_API_KEY is not set: colony-api drives root ssh to the fleet and refuses to "
                            "start without an API key")
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request, exc: RequestValidationError):
+        """A 422 that never echoes the request: FastAPI's default puts the offending `input` in the body (an
+        old image answered the GS `secrets` field with the VPN auth key in it). Only type, loc and msg."""
+        from fastapi.responses import JSONResponse
+        errs = [{k: e.get(k) for k in ("type", "loc", "msg")} for e in exc.errors()]
+        return JSONResponse(status_code=422, content={"detail": errs})
 
     @app.middleware("http")
     async def _gate(request, call_next):          # EVERY route except /health needs the key (fail closed)
@@ -130,6 +177,11 @@ def create_app() -> FastAPI:
         if req.kind not in _VALID_KINDS:
             raise HTTPException(status_code=400,
                                 detail=f"kind must be one of {sorted(_VALID_KINDS)}")
+        _check("rig", req.rig, _RIG_RE)
+        if req.host is not None:
+            _check("host", req.host, _HOST_RE)
+        _check_vars("extra", req.extra, _EXTRA_STR_RE, _EXTRA_PER_KEY)
+        _check_vars("secrets", req.secrets, _SECRET_STR_RE)
         # registry-free: a request carrying an explicit host (the device's Mender
         # reachable_ip, + role in extra) needs NO registry entry — colony resolves
         # everything from Mender + the S3 manifest. Only a bare CLI-style request
