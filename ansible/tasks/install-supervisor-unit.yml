@@ -20,6 +20,7 @@
     src: "{{ theia_run_src if (theia_run_src | default('') | length > 0) else (manifest_dir + '/../../deploy/theia-run.sh') }}"
     dest: /opt/theia/bin/theia-run
     mode: "0755"
+  register: _launcher
 
 - name: "Render the theia-supervisor.service unit (systemd hosts only)"
   ansible.builtin.template:
@@ -47,21 +48,44 @@
     state: "{{ 'restarted' if (_unit.changed or (_runtime_changed | default(false) | bool)) else 'started' }}"
   when: ansible_service_mgr == "systemd"
 
-- name: "Start the supervisor directly (NO systemd — e.g. a container rig)"
-  # A systemd-less rig (Docker container running sshd as PID 1) can't use the
-  # unit; launch the supervisor via theia-run in the background instead. Kill
-  # any prior one first so a redeploy picks up the new binary. setsid detaches
-  # it from the SSH session so it survives the play.
+# NO systemd (e.g. a Docker container running sshd as PID 1): the unit cannot be used; theia-run is launched in
+# the background instead. Its environment is a file (shell-quoted values, never interpolated into the command),
+# and the supervisor is killed + relaunched ONLY when the launcher, that environment or the runtime changed
+# (_runtime_changed), else only started when it is not running (review 2026-11-19: `changed_when: true` killed and
+# restarted the supervisor on every orchestrate).
+- name: "Supervisor environment (NO systemd)"
+  ansible.builtin.copy:
+    dest: "{{ theia_root | default('/opt/theia') }}/bin/theia-run.env"
+    mode: "0644"
+    content: |
+      THEIA_MACHINE={{ machine | string | quote }}
+      THEIA_MACHINE_INSTANCE={{ machine_instance | default(0) | string | quote }}
+      THEIA_TIPC_NETID={{ tipc_netid | default('') | string | quote }}
+  register: _sup_env
+  when: ansible_service_mgr != "systemd"
+
+- name: "Is the supervisor running? (NO systemd)"
+  ansible.builtin.command: "pgrep -f {{ (theia_root | default('/opt/theia') ~ '/bin/supervisor') | quote }}"
+  register: _sup_running
+  changed_when: false
+  failed_when: false
+  when: ansible_service_mgr != "systemd"
+
+- name: "Start (or restart on launcher / environment / runtime change) the supervisor (NO systemd)"
+  # setsid detaches it from the SSH session so it survives the play.
   ansible.builtin.shell: |
     set +e
-    for pid in $(pgrep -f '{{ theia_root | default('/opt/theia') }}/bin/supervisor'); do
+    for pid in $(pgrep -f {{ (theia_root | default('/opt/theia') ~ '/bin/supervisor') | quote }}); do
       [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ] || kill -TERM "$pid" 2>/dev/null
     done
     sleep 1
-    setsid env THEIA_MACHINE={{ machine }} THEIA_MACHINE_INSTANCE={{ machine_instance | default(0) }} THEIA_TIPC_NETID={{ tipc_netid | default('') }} /opt/theia/bin/theia-run >/var/log/theia-supervisor.log 2>&1 < /dev/null &
+    set -a; . {{ (theia_root | default('/opt/theia') ~ '/bin/theia-run.env') | quote }}; set +a
+    setsid /opt/theia/bin/theia-run >/var/log/theia-supervisor.log 2>&1 < /dev/null &
     true
   args:
     executable: /bin/bash
-  when: ansible_service_mgr != "systemd"
+  when:
+    - ansible_service_mgr != "systemd"
+    - (_launcher is changed) or (_sup_env is changed) or (_runtime_changed | default(false) | bool)
+      or (_sup_running.rc | default(1)) != 0
   changed_when: true
-
