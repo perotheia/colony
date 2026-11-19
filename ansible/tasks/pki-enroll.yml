@@ -9,11 +9,17 @@
   ansible.builtin.set_fact:
     _pki_id: "{{ mender_device_id | default(inventory_hostname) }}"
 
-- name: "PKI: directory"
+# /etc/theia first, world-traversable: creating /etc/theia/pki alone lets the file module make the parent with
+# the leaf's 0750 root:root, and the unprivileged supervisor (User=theia) then cannot reach its certificate
+# (theia-run.sh: "no fleet certificate", com refuses to start). Found by the container OTA e2e on a fresh rig.
+- name: "PKI: directories (/etc/theia traversable, pki/ 0750)"
   ansible.builtin.file:
-    path: /etc/theia/pki
+    path: "{{ item.path }}"
     state: directory
-    mode: "0750"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/theia, mode: "0755" }
+    - { path: /etc/theia/pki, mode: "0750" }
 
 - name: "PKI: generate the device key ON the rig (once)"
   ansible.builtin.shell:
