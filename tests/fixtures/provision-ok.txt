@@ -1,0 +1,62 @@
++ THEIA_WORKSPACE=/workspace
++ ansible-playbook -i /opt/colony/ansible/inventory/hosts /opt/colony/ansible/provision.yml -e target=ai64-proto -e @SECRETS_FILE
+
+PLAY [Resolve the rig (registry-free)] *****************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [localhost]
+
+TASK [Add the rig to the inventory] ********************************************
+changed: [localhost]
+
+PLAY [Provision ai64-proto] ****************************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [ai64-proto]
+
+TASK [Base dirs] ***************************************************************
+ok: [ai64-proto] => (item=/opt/theia)
+changed: [ai64-proto] => (item=/var/lib/theia)
+
+TASK [Load the TIPC module now and at boot] ************************************
+ok: [ai64-proto]
+
+TASK [Apt holds (kernel, bootloader)] ******************************************
+skipping: [ai64-proto]
+
+TASK [Include the per-device PKI (own key on the rig, certificate from the GS signer)] ***
+included: /opt/colony/ansible/tasks/pki-enroll.yml for ai64-proto
+
+TASK [PKI: report] *************************************************************
+ok: [ai64-proto] => {
+    "msg": "COLONY_PKI ai64-proto serial 5d3f9a0c41e2 until 2027-11-19T10:00:00Z"
+}
+
+TASK [Include the fleet VPN join (Tailscale)] **********************************
+included: /opt/colony/ansible/tasks/install-tailscale.yml for ai64-proto
+
+TASK [Tailscale: join the fleet tailnet] ***************************************
+changed: [ai64-proto]
+
+TASK [Tailscale: echo the auth key (a careless debug task)] ********************
+ok: [ai64-proto] => {
+    "msg": "authkey SECRET_VALUE"
+}
+
+TASK [COLONY_VPN_IP master] ****************************************************
+ok: [ai64-proto] => {
+    "msg": "COLONY_VPN_IP master 100.91.130.60"
+}
+
+TASK [Optional probe (ignored when absent)] ************************************
+fatal: [ai64-proto]: FAILED! => {"changed": false, "msg": "probe not installed"}
+...ignoring
+
+TASK [Rig class + what was skipped for it — master] ****************************
+ok: [ai64-proto] => {
+    "msg": "rig_class=apt; skipped by design: mender-artifact-install, opkg-feed"
+}
+
+PLAY RECAP *********************************************************************
+ai64-proto                 : ok=12   changed=3    unreachable=0    failed=0    skipped=1    rescued=0    ignored=1
+localhost                  : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0

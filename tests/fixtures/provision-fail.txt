@@ -1,0 +1,15 @@
++ THEIA_WORKSPACE=/workspace
+
+PLAY [Provision ai64-proto] ****************************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [ai64-proto]
+
+TASK [Base dirs] ***************************************************************
+changed: [ai64-proto]
+
+TASK [Install the runtime packages] ********************************************
+fatal: [ai64-proto]: FAILED! => {"changed": false, "msg": "No package matching 'theia-runtime=0.9.9' is available", "authkey": "SECRET_VALUE"}
+
+PLAY RECAP *********************************************************************
+ai64-proto                 : ok=2    changed=1    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0
