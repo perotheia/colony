@@ -267,10 +267,14 @@ def create_app() -> FastAPI:
         user = _check("user", user, _USER_RE) if user else os.environ.get("COLONY_SSH_USER", "axadmin")
         # one ssh, read both. eth0 first; fall back to the first non-lo iface.
         # read hostname + eth0 MAC (fallback: first non-lo iface) in one ssh.
+        # sudo= : can this user become root without a password (provision needs it)? root needs no sudo
+        # (opkg images have none); `sudo -n` never prompts. The GS preflight maps sudo=no to `no-sudo`.
         remote = (
             "echo hostname=$(hostname); "
             "cat /sys/class/net/eth0/address 2>/dev/null "
-            "| sed 's/^/mac=/' || true"
+            "| sed 's/^/mac=/' || true; "
+            "if [ \"$(id -u)\" = 0 ]; then echo sudo=root; "
+            "elif sudo -n true >/dev/null 2>&1; then echo sudo=ok; else echo sudo=no; fi"
         )
         h, port = _split_hostport(host)
         cmd = ["ssh", "-o", "BatchMode=yes", *_SSH_TRUST,
@@ -297,7 +301,8 @@ def create_app() -> FastAPI:
         # mint a UUID the operator uses as the Controller ID (consistent with
         # preauth); /set-identity writes it onto the device at Save.
         return {"host": host, "mac": info.get("mac"),
-                "hostname": info.get("hostname"), "controller_id": str(_uuid.uuid4())}
+                "hostname": info.get("hostname"), "controller_id": str(_uuid.uuid4()),
+                "sudo": info.get("sudo")}          # root | ok | no (None: the rig printed nothing)
 
     return app
 
